@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -7,6 +8,14 @@ const nextConfig: NextConfig = {
   // development-only Strict Mode remount would initialize it twice.
   reactStrictMode: false,
   webpack(config, { webpack }) {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "@spz-loader/core": path.resolve(
+        process.cwd(),
+        "app/spzLoaderUnsupported.ts",
+      ),
+    };
+
     config.plugins.push(
       new webpack.DefinePlugin({
         CESIUM_BASE_URL: JSON.stringify("/cesium"),
