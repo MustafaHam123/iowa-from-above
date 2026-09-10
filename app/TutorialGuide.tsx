@@ -1,6 +1,13 @@
 "use client";
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { INITIAL_JOURNEY, type JourneyStatus } from "./journeyStops";
+import { loadJourneyCheckpoint } from "./journeyProgress";
+import {
+  AUDIO_MUTED_EVENT,
+  getStoredAudioMuted,
+  GUIDE_AUDIO_EVENT,
+} from "./audioPreferences";
 
 const TUTORIAL_STEPS: Array<{
   key: string;
@@ -14,21 +21,21 @@ const TUTORIAL_STEPS: Array<{
     keyLabel: "Enter",
     holdMs: 0,
     audioSrc: "/audio/tutorial/01-introduction.mp3",
-    message: "Hey, I'm Avery. I'll guide you while we explore Iowa from above.",
+    message: "Hi, I'm Avery, and I'll be flying with you today. Before we head across Iowa, let's get comfortable with the controls.",
   },
-  { key: "w", keyLabel: "W", holdMs: 1_500, audioSrc: "/audio/tutorial/02-forward.mp3", message: "Hold W to fly forward." },
-  { key: "s", keyLabel: "S", holdMs: 1_500, audioSrc: "/audio/tutorial/03-backward.mp3", message: "Now hold S to fly backward." },
+  { key: "w", keyLabel: "W", holdMs: 1_500, audioSrc: "/audio/tutorial/02-forward.mp3", message: "Hold W and ease the drone forward." },
+  { key: "s", keyLabel: "S", holdMs: 1_500, audioSrc: "/audio/tutorial/03-backward.mp3", message: "Good. Now hold S to bring it backward." },
   { key: "a", keyLabel: "A", holdMs: 1_500, audioSrc: "/audio/tutorial/04-left.mp3", message: "Hold A to turn left." },
-  { key: "d", keyLabel: "D", holdMs: 1_500, audioSrc: "/audio/tutorial/05-right.mp3", message: "Hold D to turn right." },
-  { key: "e", keyLabel: "E", holdMs: 1_500, audioSrc: "/audio/tutorial/06-ascend.mp3", message: "Hold E to rise higher." },
-  { key: "q", keyLabel: "Q", holdMs: 1_500, audioSrc: "/audio/tutorial/07-descend.mp3", message: "Hold Q to descend." },
-  { key: "shift", keyLabel: "Shift", holdMs: 1_500, audioSrc: "/audio/tutorial/08-boost.mp3", message: "Hold Shift while flying to boost your speed." },
+  { key: "d", keyLabel: "D", holdMs: 1_500, audioSrc: "/audio/tutorial/05-right.mp3", message: "And use D to turn right." },
+  { key: "e", keyLabel: "E", holdMs: 1_500, audioSrc: "/audio/tutorial/06-ascend.mp3", message: "To gain altitude, hold E." },
+  { key: "q", keyLabel: "Q", holdMs: 1_500, audioSrc: "/audio/tutorial/07-descend.mp3", message: "To come back down, hold Q." },
+  { key: "shift", keyLabel: "Shift", holdMs: 1_500, audioSrc: "/audio/tutorial/08-boost.mp3", message: "Need a little more speed? Hold Shift while you fly." },
   {
     key: "enter",
     keyLabel: "Enter",
     holdMs: 0,
     audioSrc: "/audio/tutorial/09-complete.mp3",
-    message: "Nice flying. You're ready to explore on your own.",
+    message: "You've got it. Press Enter, then follow the purple route to the Iowa State Capitol. I'll meet you there.",
   },
 ];
 
@@ -46,10 +53,141 @@ export default function TutorialGuide() {
   const [isControlHolding, setIsControlHolding] = useState(false);
   const [isIntroComplete, setIsIntroComplete] = useState(false);
   const [mouthFrame, setMouthFrame] = useState(0);
+  const [journey, setJourney] = useState(INITIAL_JOURNEY);
   const narrationRef = useRef<HTMLAudioElement | null>(null);
   const narrationStepRef = useRef(-1);
   const isComplete = stepIndex >= TUTORIAL_STEPS.length;
   const step = TUTORIAL_STEPS[Math.min(stepIndex, TUTORIAL_STEPS.length - 1)];
+
+  useEffect(() => {
+    if (!loadJourneyCheckpoint()) {
+      return;
+    }
+
+    const restoreTimer = window.setTimeout(() => {
+      setIsIntroComplete(true);
+      setStepIndex(TUTORIAL_STEPS.length);
+    }, 0);
+
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  useEffect(() => {
+    const update = (event: Event) => setJourney((event as CustomEvent<JourneyStatus>).detail);
+    window.addEventListener("iowa-journey-status", update);
+    return () => window.removeEventListener("iowa-journey-status", update);
+  }, []);
+
+  useEffect(() => {
+    function updateMuted(event: Event) {
+      if (narrationRef.current) {
+        narrationRef.current.muted = Boolean(
+          (event as CustomEvent<boolean>).detail,
+        );
+      }
+    }
+
+    window.addEventListener(AUDIO_MUTED_EVENT, updateMuted);
+    return () => window.removeEventListener(AUDIO_MUTED_EVENT, updateMuted);
+  }, []);
+
+  useEffect(() => {
+    let activeAudio: HTMLAudioElement | null = null;
+    let audioContext: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let source: MediaElementAudioSourceNode | null = null;
+    let animationFrame = 0;
+    let lastMouthUpdate = 0;
+    let samples: Uint8Array<ArrayBuffer> | null = null;
+
+    function stopMouth() {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
+      setMouthFrame(0);
+    }
+
+    function pauseMouth() {
+      stopMouth();
+      void audioContext?.suspend().catch(() => undefined);
+    }
+
+    function updateMouth(time: number) {
+      if (!activeAudio || activeAudio.paused || !analyser || !samples) return;
+
+      if (time - lastMouthUpdate >= 70) {
+        analyser.getByteTimeDomainData(samples);
+        let sumSquares = 0;
+
+        for (const sample of samples) {
+          const normalized = (sample - 128) / 128;
+          sumSquares += normalized * normalized;
+        }
+
+        const volume = Math.sqrt(sumSquares / samples.length);
+        const speechFrame =
+          1 + ((Math.floor(time / 85) + Math.round(volume * 30)) % 5);
+        const nextFrame = volume < 0.018 ? 0 : speechFrame;
+
+        setMouthFrame((current) =>
+          current === nextFrame ? current : nextFrame,
+        );
+        lastMouthUpdate = time;
+      }
+
+      animationFrame = window.requestAnimationFrame(updateMouth);
+    }
+
+    function startMouth() {
+      window.cancelAnimationFrame(animationFrame);
+      void audioContext?.resume().catch(() => undefined);
+      animationFrame = window.requestAnimationFrame(updateMouth);
+    }
+
+    function detachAudio() {
+      activeAudio?.removeEventListener("play", startMouth);
+      activeAudio?.removeEventListener("pause", pauseMouth);
+      activeAudio?.removeEventListener("ended", pauseMouth);
+      source?.disconnect();
+      analyser?.disconnect();
+      if (audioContext) void audioContext.close();
+      source = null;
+      analyser = null;
+      audioContext = null;
+      samples = null;
+    }
+
+    function followJourneyAudio(event: Event) {
+      const nextAudio = (event as CustomEvent<HTMLAudioElement>).detail;
+      if (nextAudio === activeAudio) return;
+
+      detachAudio();
+      stopMouth();
+      activeAudio = nextAudio;
+      audioContext = new AudioContext();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.55;
+      samples = new Uint8Array(analyser.fftSize);
+      source = audioContext.createMediaElementSource(activeAudio);
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
+      activeAudio.addEventListener("play", startMouth);
+      activeAudio.addEventListener("pause", pauseMouth);
+      activeAudio.addEventListener("ended", pauseMouth);
+      if (!activeAudio.paused) startMouth();
+    }
+
+    window.addEventListener(GUIDE_AUDIO_EVENT, followJourneyAudio);
+    return () => {
+      window.removeEventListener(GUIDE_AUDIO_EVENT, followJourneyAudio);
+      detachAudio();
+      stopMouth();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isComplete) window.dispatchEvent(new Event("iowa-tutorial-complete"));
+  }, [isComplete]);
 
   useEffect(() => {
     function handleIntroComplete() {
@@ -73,6 +211,7 @@ export default function TutorialGuide() {
       const narration = document.createElement("audio");
       narration.preload = "none";
       narration.src = step.audioSrc;
+      narration.muted = getStoredAudioMuted();
       narration.load();
       narrationRef.current = narration;
       narrationStepRef.current = stepIndex;
@@ -235,7 +374,7 @@ export default function TutorialGuide() {
 
   return (
     <>
-      <div className="pointer-events-none fixed bottom-28 left-1/2 z-20 h-1.5 w-48 -translate-x-1/2 overflow-hidden rounded-full bg-black/55 sm:bottom-5">
+      {!isComplete && <div className="pointer-events-none fixed bottom-28 left-1/2 z-20 h-1.5 w-48 -translate-x-1/2 overflow-hidden rounded-full bg-black/55 sm:bottom-5">
         <div
           role="progressbar"
           aria-label="Tutorial control progress"
@@ -248,12 +387,12 @@ export default function TutorialGuide() {
             transitionDuration: `${isControlHolding ? step.holdMs : 0}ms`,
           }}
         />
-      </div>
+      </div>}
 
       <aside
         aria-label="Flight tutorial"
         aria-live="polite"
-        className="pointer-events-none fixed bottom-4 left-3 z-30 flex max-w-[calc(100vw-1.5rem)] items-end sm:left-5"
+        className="avery-guide pointer-events-none fixed bottom-4 left-3 z-30 flex max-w-[calc(100vw-1.5rem)] items-end sm:left-5"
         style={{ "--guide-scale": 1.4 } as CSSProperties}
       >
         <div
@@ -284,7 +423,18 @@ export default function TutorialGuide() {
               </span>
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="guide-dialogue -ml-4 -translate-y-3 w-[min(21rem,calc(100vw-8rem))] min-h-28 pb-4 pl-8 pr-6 pt-4 text-white sm:-ml-5 sm:pl-9 sm:pr-8">
+            <p className="text-sm font-medium tracking-normal text-white/70 sm:text-base">
+              Avery · Your guide
+            </p>
+            <p className="mt-1.5 max-w-[27ch] text-sm leading-5 tracking-normal text-white sm:text-base sm:leading-6">
+              {journey.phase === "cinematic" && journey.caption
+                ? journey.caption
+                : journey.message}
+            </p>
+          </div>
+        )}
       </aside>
     </>
   );

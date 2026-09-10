@@ -81,12 +81,14 @@ export async function GET(request: Request) {
             }),
           ),
           contentType: "application/json; charset=utf-8",
+          expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1_000,
         };
       },
     );
 
     return new Response(new Uint8Array(asset.body), {
       headers: {
+        "Cache-Control": "private, max-age=2592000",
         "Content-Type": asset.contentType,
         "X-Address-Cache": asset.cacheStatus,
       },

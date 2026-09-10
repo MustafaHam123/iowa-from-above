@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import { loadJourneyCheckpoint } from "./journeyProgress";
 
 const INTRO_STEPS = [
   { type: "text", content: "Every place has a story." },
@@ -12,10 +13,6 @@ const INTRO_STEPS = [
   {
     type: "text",
     content: "Take to the skies and discover Iowa from a new perspective.",
-  },
-  {
-    type: "text",
-    content: "Explore its landmarks, communities, history, and hidden stories.",
   },
   { type: "text", content: "Welcome to Iowa From Above." },
   { type: "image", content: "Congressional App Challenge 2026" },
@@ -35,6 +32,19 @@ export default function IntroSequence() {
   const [isRemoved, setIsRemoved] = useState(false);
   const [isSkipRunning, setIsSkipRunning] = useState(false);
   const [skipProgress, setSkipProgress] = useState(0);
+
+  useEffect(() => {
+    if (!loadJourneyCheckpoint()) {
+      return;
+    }
+
+    const restoreTimer = window.setTimeout(() => {
+      setIsRemoved(true);
+      window.dispatchEvent(new Event("iowa-intro-complete"));
+    }, 0);
+
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
 
   useEffect(() => {
     if (!isOverlayVisible) {
@@ -119,11 +129,29 @@ export default function IntroSequence() {
       if (event.key === "Escape") {
         setIsContentVisible(false);
         setIsOverlayVisible(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        if (!event.repeat) {
+          setSkipProgress(0);
+          setIsSkipRunning(true);
+        }
+      }
+    }
+
+    function handleKeyUp(event: KeyboardEvent) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        setIsSkipRunning(false);
+        setSkipProgress(0);
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, []);
 
   if (isRemoved) {
@@ -137,26 +165,22 @@ export default function IntroSequence() {
       role="dialog"
       aria-label="Iowa From Above introduction"
       aria-modal="true"
-      className={`fixed inset-0 z-[2147483647] grid place-items-center overflow-hidden bg-black transition-opacity duration-1000 motion-reduce:duration-0 ${
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        startSkipping();
+      }}
+      onPointerUp={cancelSkipping}
+      onPointerCancel={cancelSkipping}
+      className={`fixed inset-0 z-[2147483646] grid touch-none select-none place-items-center overflow-hidden bg-black transition-opacity duration-1000 motion-reduce:duration-0 ${
         isOverlayVisible ? "opacity-100" : "pointer-events-none opacity-0"
       }`}
     >
-      <button
-        type="button"
-        onPointerDown={startSkipping}
-        onPointerUp={cancelSkipping}
-        onPointerCancel={cancelSkipping}
-        onPointerLeave={cancelSkipping}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") startSkipping();
-        }}
-        onKeyUp={(event) => {
-          if (event.key === "Enter" || event.key === " ") cancelSkipping();
-        }}
-        onClick={(event) => event.preventDefault()}
-        className="absolute bottom-7 left-1/2 z-10 w-44 -translate-x-1/2 touch-none select-none font-mono text-[11px] text-white/65 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+      <div
+        className="pointer-events-none absolute bottom-7 left-1/2 z-10 w-52 -translate-x-1/2 text-center font-mono text-[11px] text-white/65"
       >
-        <span>{isSkipRunning ? "Keep holding..." : "Hold to skip intro"}</span>
+        <span>
+          {isSkipRunning ? "Keep holding..." : "Hold anywhere to skip"}
+        </span>
         <span
           role="progressbar"
           aria-label="Skip intro progress"
@@ -170,7 +194,7 @@ export default function IntroSequence() {
             style={{ width: `${skipProgress}%` }}
           />
         </span>
-      </button>
+      </div>
 
       <div
         aria-live="polite"

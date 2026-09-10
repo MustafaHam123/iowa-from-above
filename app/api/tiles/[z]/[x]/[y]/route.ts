@@ -1,4 +1,15 @@
-import { getCachedGoogleAsset } from "../../../../googleCache";
+import {
+  getCachedGoogleAsset,
+  getGoogleResponseCachePolicy,
+} from "../../../../googleCache";
+import {
+  addGoogleVisitorCookie,
+  consumeGoogleRequestQuota,
+  getGoogleVisitor,
+  getNextGoogleDayBoundary,
+  GoogleQuotaLimitError,
+  quotaResponseHeaders,
+} from "../../../../googleQuota";
 
 export const runtime = "nodejs";
 
@@ -18,6 +29,7 @@ let cachedSession:
       expiryMs: number;
     }
   | undefined;
+let pendingSession: Promise<string> | undefined;
 
 function scaleForZoom(zoom: number) {
   return TILE_SIZE * 2 ** zoom;
@@ -46,7 +58,7 @@ function tileTouchesIowa(z: number, x: number, y: number) {
   );
 }
 
-async function getGoogleSession() {
+async function getGoogleSession(visitorId: string) {
   const key = process.env.GOOGLE_MAP_TILES_API_KEY;
 
   if (!key) {
@@ -57,41 +69,55 @@ async function getGoogleSession() {
     return cachedSession.value;
   }
 
-  const response = await fetch(
-    `https://tile.googleapis.com/v1/createSession?key=${encodeURIComponent(key)}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        mapType: "satellite",
-        language: "en-US",
-        region: "US",
-        scale: "scaleFactor1x",
-      }),
-    },
-  );
+  if (!pendingSession) {
+    pendingSession = (async () => {
+      await consumeGoogleRequestQuota("root", visitorId);
+      const response = await fetch(
+        `https://tile.googleapis.com/v1/createSession?key=${encodeURIComponent(key)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            mapType: "satellite",
+            language: "en-US",
+            region: "US",
+            scale: "scaleFactor1x",
+          }),
+        },
+      );
 
-  if (!response.ok) {
-    throw new Error(`Google tile session failed: ${response.status}`);
+      if (!response.ok) {
+        throw new Error(`Google tile session failed: ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        session: string;
+        expiry?: string;
+      };
+      const expirySeconds = Number(data.expiry);
+
+      cachedSession = {
+        value: data.session,
+        expiryMs: Number.isFinite(expirySeconds)
+          ? expirySeconds * 1000
+          : Date.now() + 60 * 60 * 1000,
+      };
+
+      return cachedSession.value;
+    })();
   }
 
-  const data = (await response.json()) as { session: string; expiry?: string };
-  const expirySeconds = Number(data.expiry);
-
-  cachedSession = {
-    value: data.session,
-    expiryMs: Number.isFinite(expirySeconds)
-      ? expirySeconds * 1000
-      : Date.now() + 60 * 60 * 1000,
-  };
-
-  return cachedSession.value;
+  try {
+    return await pendingSession;
+  } finally {
+    pendingSession = undefined;
+  }
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ z: string; x: string; y: string }> },
 ) {
   const params = await context.params;
@@ -115,12 +141,15 @@ export async function GET(
     return new Response(null, { status: 404 });
   }
 
+  const visitor = getGoogleVisitor(request);
+
   try {
     const asset = await getCachedGoogleAsset(
       `google-2d:${z}/${x}/${y}`,
       async () => {
         const key = process.env.GOOGLE_MAP_TILES_API_KEY;
-        const session = await getGoogleSession();
+        const session = await getGoogleSession(visitor.id);
+        await consumeGoogleRequestQuota("render", visitor.id);
         const response = await fetch(
           `https://tile.googleapis.com/v1/2dtiles/${z}/${x}/${y}?session=${encodeURIComponent(
             session,
@@ -133,25 +162,59 @@ export async function GET(
         );
 
         if (!response.ok) {
+          if (response.status === 429) {
+            throw new GoogleQuotaLimitError(
+              "google",
+              getNextGoogleDayBoundary(),
+            );
+          }
+
           throw new Error(`Google map tile request failed: ${response.status}`);
         }
 
         return {
           body: Buffer.from(await response.arrayBuffer()),
+          ...getGoogleResponseCachePolicy(response),
           contentType: response.headers.get("content-type") ?? "image/png",
         };
       },
     );
 
+    const headers = addGoogleVisitorCookie(new Headers({
+      "Cache-Control": asset.cacheControl ?? "no-store",
+      "Content-Type": asset.contentType,
+      "X-Google-Api-Cache": asset.cacheStatus,
+    }), request, visitor);
+
     return new Response(new Uint8Array(asset.body), {
       status: 200,
-      headers: {
-        "Cache-Control": "public, max-age=86400",
-        "Content-Type": asset.contentType,
-        "X-Google-Api-Cache": asset.cacheStatus,
-      },
+      headers,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof GoogleQuotaLimitError) {
+      const isGoogleLimit = error.scope === "google";
+
+      return new Response(
+        JSON.stringify({
+          error: isGoogleLimit
+            ? "RATE_LIMIT_REACHED"
+            : error.scope === "visitor-daily"
+              ? "VISITOR_DAILY_LIMIT_REACHED"
+              : "MONTHLY_LIMIT_REACHED",
+          resetsAt: error.resetsAt.toISOString(),
+          scope: error.scope,
+        }),
+        {
+          status: isGoogleLimit ? 429 : 403,
+          headers: addGoogleVisitorCookie(
+            quotaResponseHeaders(error),
+            request,
+            visitor,
+          ),
+        },
+      );
+    }
+
     return new Response(null, { status: 502 });
   }
 }

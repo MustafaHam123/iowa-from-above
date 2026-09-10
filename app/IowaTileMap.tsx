@@ -1,11 +1,50 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import * as Cesium from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
 import { ACES_FILMIC_FRAGMENT_SHADER } from "./shaders/acesFilmic";
 import { DEPTH_DISTANCE_BLUR_FRAGMENT_SHADER } from "./shaders/depthDistanceBlur";
 import { PIXEL_FILTER_FRAGMENT_SHADER } from "./shaders/pixelFilter";
+import {
+  createJourneyController,
+} from "./journeyController";
+import { INITIAL_JOURNEY, JOURNEY_STOPS } from "./journeyStops";
+import { EXHIBITS } from "./exhibits";
+import LandmarkChat from "./LandmarkChat";
+import OutroSequence from "./OutroSequence";
+import {
+  clearJourneyCheckpoint,
+  loadJourneyCheckpoint,
+  saveJourneyCheckpoint,
+  type JourneyCheckpoint,
+} from "./journeyProgress";
+import {
+  AUDIO_MUTED_EVENT,
+  getStoredAudioMuted,
+  setStoredAudioMuted,
+} from "./audioPreferences";
+
+type GoogleApiUsage = {
+  month: string;
+  counts: { root: number; render: number };
+  limits: { root: number; render: number };
+};
+
+// HUD-only presentation scale. Flight physics and boundaries remain metric.
+const MINIMUM_FLIGHT_ALTITUDE_FEET = 350;
+const START_FLIGHT_ALTITUDE_FEET = 1_000;
+const ALTITUDE_GAUGE_START_FEET = START_FLIGHT_ALTITUDE_FEET;
+// Cesium's world height is calibrated separately from the flight HUD so the
+// drone can sit visually closer to the photogrammetry while using a separate
+// feet readout on the flight HUD.
+const DRONE_START_HEIGHT_METERS = 300;
+const MINIMUM_DRONE_HEIGHT_METERS = 110;
+const MAXIMUM_DESCENT_FROM_START_METERS =
+  DRONE_START_HEIGHT_METERS - MINIMUM_DRONE_HEIGHT_METERS;
+const DISPLAYED_FEET_PER_WORLD_METER =
+  (START_FLIGHT_ALTITUDE_FEET - MINIMUM_FLIGHT_ALTITUDE_FEET) /
+  MAXIMUM_DESCENT_FROM_START_METERS;
 
 const IOWA_BOUNDS = {
   north: 43.5012,
@@ -14,16 +53,11 @@ const IOWA_BOUNDS = {
   east: -90.1401,
 };
 
-const CAPITOL = {
-  lat: 41.590395901424806,
-  lng: -93.60779251106203,
-  height: 230.26178487817083,
-};
-
 const DRONE_START = {
-  lat: 41.59025978611684,
-  lng: -93.61212194967717,
-  height: 247.29568133850805,
+  lat: 41.590364,
+  // Start a little farther west of the Capitol without changing latitude or altitude.
+  lng: -93.6091,
+  height: DRONE_START_HEIGHT_METERS,
 };
 
 const SUNSET_SKYBOX_SOURCES = {
@@ -34,18 +68,6 @@ const SUNSET_SKYBOX_SOURCES = {
   positiveZ: "/sky/hdr-sunset-007/positiveZ.jpg",
   negativeZ: "/sky/hdr-sunset-007/negativeZ.jpg",
 };
-
-const CAPITOL_TO_RAILROAD_BRIDGE_ROUTE = [
-  { lat: 41.5912, lng: -93.60382 },
-  { lat: 41.59095, lng: -93.6061 },
-  { lat: 41.59082, lng: -93.60905 },
-  { lat: 41.59052, lng: -93.61125 },
-  { lat: 41.58895, lng: -93.61225 },
-  { lat: 41.58765, lng: -93.6133 },
-  { lat: 41.58635, lng: -93.61455 },
-  { lat: 41.58542, lng: -93.6161 },
-  { lat: 41.58504, lng: -93.61755 },
-];
 
 const DRONE_SPEED_METERS_PER_SECOND = 105;
 const DRONE_REVERSE_METERS_PER_SECOND = 58;
@@ -66,17 +88,16 @@ const CAMERA_PITCH_INFLUENCE = 0.62;
 const CAMERA_ROLL_INFLUENCE = 0.68;
 // Compensate for the converted FBX's visual center after its axis correction.
 const CAMERA_SCREEN_TARGET_LIFT_METERS = 120;
-const LOW_ALTITUDE_CLEARANCE_METERS = 4;
-const LOW_ALTITUDE_PUSH_SPEED_METERS_PER_SECOND = 34;
-const LOW_ALTITUDE_PUSH_STIFFNESS = 5.5;
-const ROAD_TRAIL_SURFACE_OFFSET_METERS = 0.45;
-const ROAD_TRAIL_SAMPLE_SPACING = 18;
-const ROAD_TRAIL_REFRESH_INTERVAL_SECONDS = 1;
-const ROAD_TRAIL_REFRESH_LIMIT = 12;
-const SURFACE_HEIGHT_SAMPLE_INTERVAL_SECONDS = 0.1;
 const SPEED_PARTICLE_MAX_COUNT = 160;
 const SPEED_PARTICLE_NEAR_DISTANCE_METERS = 85;
 const SPEED_PARTICLE_FAR_DISTANCE_METERS = 430;
+const ACTIVE_FLIGHT_FRAME_RATE = 30;
+const IDLE_FLIGHT_FRAME_RATE = 24;
+const IDLE_FRAME_RATE_DELAY_MS = 1_200;
+const MAP_MAXIMUM_REQUESTS = 24;
+const MAP_MAXIMUM_REQUESTS_PER_SERVER = 12;
+const API_USAGE_REFRESH_INTERVAL_MS = 30_000;
+const CINEMATIC_SKIP_HOLD_MS = 1_500;
 const MODEL_AXIS_FIX = new Cesium.HeadingPitchRoll(
   Cesium.Math.toRadians(-90),
   0,
@@ -108,12 +129,10 @@ type SpeedParticle = {
   color: Cesium.Color;
 };
 
-type RoutePoint = {
-  lat: number;
-  lng: number;
-};
-
 type VisualSettings = {
+  clarity: number;
+  vibrance: number;
+  splitTone: number;
   exposure: number;
   aces: number;
   brightness: number;
@@ -136,18 +155,21 @@ type VisualSettings = {
 };
 
 const DEFAULT_VISUAL_SETTINGS: VisualSettings = {
-  exposure: 1.33,
-  aces: 0.33,
-  brightness: -0.04,
-  contrast: 1.1,
-  saturation: 1.12,
-  hue: 1,
-  warmth: 0.2,
-  shadows: 0.01,
-  highlights: 0.04,
-  fade: 0.07,
-  vignette: 0.16,
-  filterStrength: 0.7,
+  clarity: 0.22,
+  vibrance: 0.2,
+  splitTone: 0.65,
+  exposure: 1.12,
+  aces: 0,
+  brightness: 0,
+  contrast: 1.08,
+  saturation: 1.04,
+  hue: 0,
+  warmth: 0.12,
+  shadows: 0.018,
+  highlights: -0.025,
+  fade: 0,
+  vignette: 0.1,
+  filterStrength: 0.85,
   bloom: 0,
   bloomRadius: 1,
   lightIntensity: 2.2,
@@ -223,41 +245,6 @@ function clampToBounds(
   };
 }
 
-function distanceMeters(start: RoutePoint, end: RoutePoint) {
-  const metersPerDegreeLatitude = 111_320;
-  const averageLatitude = Cesium.Math.toRadians((start.lat + end.lat) / 2);
-  const metersPerDegreeLongitude =
-    metersPerDegreeLatitude * Math.cos(averageLatitude);
-  const northMeters = (end.lat - start.lat) * metersPerDegreeLatitude;
-  const eastMeters = (end.lng - start.lng) * metersPerDegreeLongitude;
-
-  return Math.hypot(northMeters, eastMeters);
-}
-
-function densifyRoute(route: RoutePoint[], spacingMeters: number) {
-  const sampledRoute: RoutePoint[] = [];
-
-  for (let index = 0; index < route.length - 1; index += 1) {
-    const start = route[index];
-    const end = route[index + 1];
-    const segmentCount = Math.max(
-      1,
-      Math.ceil(distanceMeters(start, end) / spacingMeters),
-    );
-
-    for (let step = 0; step < segmentCount; step += 1) {
-      const amount = step / segmentCount;
-      sampledRoute.push({
-        lat: Cesium.Math.lerp(start.lat, end.lat, amount),
-        lng: Cesium.Math.lerp(start.lng, end.lng, amount),
-      });
-    }
-  }
-
-  sampledRoute.push(route[route.length - 1]);
-  return sampledRoute;
-}
-
 function applyVisualSettings(
   viewer: Cesium.Viewer,
   gradeStage: Cesium.PostProcessStage | undefined,
@@ -300,6 +287,10 @@ function applyVisualSettings(
   }
 
   gradeStage.uniforms.acesExposure = settings.exposure;
+  gradeStage.uniforms.clarity = window.matchMedia("(pointer: coarse)").matches
+    ? 0 : settings.clarity;
+  gradeStage.uniforms.vibrance = settings.vibrance;
+  gradeStage.uniforms.splitTone = settings.splitTone;
   gradeStage.uniforms.acesStrength = settings.aces;
   gradeStage.uniforms.brightness = settings.brightness;
   gradeStage.uniforms.contrast = settings.contrast;
@@ -342,6 +333,9 @@ function applyGoldenHourPreset(
       name: "threejs_aces_filmic_tone_mapping",
       fragmentShader: ACES_FILMIC_FRAGMENT_SHADER,
       uniforms: {
+        clarity: settings.clarity,
+        vibrance: settings.vibrance,
+        splitTone: settings.splitTone,
         acesExposure: settings.exposure,
         acesStrength: settings.aces,
         brightness: settings.brightness,
@@ -406,6 +400,10 @@ export default function IowaTileMap() {
   const speedRevRef = useRef<HTMLDivElement>(null);
   const altitudeRevRef = useRef<HTMLDivElement>(null);
   const compassNeedleRef = useRef<HTMLSpanElement>(null);
+  const boostChargesRef = useRef(0);
+  const boostActiveUntilRef = useRef(0);
+  const boostActiveRef = useRef(false);
+  const activateBoostRef = useRef<(() => void) | null>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
   const teleportDroneRef = useRef<
     ((destination: { lat: number; lng: number }) => void) | null
@@ -418,12 +416,130 @@ export default function IowaTileMap() {
   const [address, setAddress] = useState("");
   const [addressMessage, setAddressMessage] = useState("");
   const [isFindingAddress, setIsFindingAddress] = useState(false);
+  const [isQuotaReached, setIsQuotaReached] = useState(false);
+  const [journeyStatus, setJourneyStatus] = useState(INITIAL_JOURNEY);
+  const [boostStatus, setBoostStatus] = useState({ charges: 0, active: false });
+  const [isCinematicSkipHolding, setIsCinematicSkipHolding] = useState(false);
+  const cinematicSkipTimerRef = useRef<number | null>(null);
+  const [googleApiUsage, setGoogleApiUsage] =
+    useState<GoogleApiUsage | null>(null);
+  const [isApiStatsOpen, setIsApiStatsOpen] = useState(false);
+  const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const currentExhibit = EXHIBITS[journeyStatus.index];
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(
+      () => setIsAudioMuted(getStoredAudioMuted()),
+      0,
+    );
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  function toggleAudioMuted() {
+    setIsAudioMuted((current) => {
+      const next = !current;
+      setStoredAudioMuted(next);
+      return next;
+    });
+  }
+
+  function pressMobileFlightControl(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    key: string,
+  ) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  }
+
+  function releaseMobileFlightControl(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    key: string,
+  ) {
+    event.preventDefault();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    window.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
+  }
+
+  function cancelCinematicSkip() {
+    if (cinematicSkipTimerRef.current !== null) {
+      window.clearTimeout(cinematicSkipTimerRef.current);
+      cinematicSkipTimerRef.current = null;
+    }
+    setIsCinematicSkipHolding(false);
+  }
+
+  function startCinematicSkip(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    if (journeyStatus.phase !== "cinematic" || cinematicSkipTimerRef.current !== null) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsCinematicSkipHolding(true);
+    cinematicSkipTimerRef.current = window.setTimeout(() => {
+      cinematicSkipTimerRef.current = null;
+      setIsCinematicSkipHolding(false);
+      window.dispatchEvent(new CustomEvent("iowa-journey-action", { detail: "skip" }));
+    }, CINEMATIC_SKIP_HOLD_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (cinematicSkipTimerRef.current !== null) {
+        window.clearTimeout(cinematicSkipTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isApiStatsOpen) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function refreshGoogleApiUsage() {
+      try {
+        const response = await fetch("/api/google-usage", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const usage = (await response.json()) as GoogleApiUsage;
+
+        if (!isCancelled) {
+          setGoogleApiUsage(usage);
+        }
+      } catch {
+        // The tracker is diagnostic only and must never interrupt the game.
+      }
+    }
+
+    void refreshGoogleApiUsage();
+    const refreshInterval = window.setInterval(
+      refreshGoogleApiUsage,
+      API_USAGE_REFRESH_INTERVAL_MS,
+    );
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(refreshInterval);
+    };
+  }, [isApiStatsOpen]);
 
   useEffect(() => {
     if (isAddressOpen) {
       addressInputRef.current?.focus();
     }
   }, [isAddressOpen]);
+
+  function openAddressSearchFromJourneyPrompt() {
+    setAddressMessage("");
+    setIsAddressOpen(true);
+  }
 
   async function handleAddressSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -478,8 +594,14 @@ export default function IowaTileMap() {
       return;
     }
 
-    Cesium.RequestScheduler.maximumRequests = 8;
-    Cesium.RequestScheduler.maximumRequestsPerServer = 2;
+    setIsQuotaReached(false);
+
+    const previousMaximumRequests = Cesium.RequestScheduler.maximumRequests;
+    const previousMaximumRequestsPerServer =
+      Cesium.RequestScheduler.maximumRequestsPerServer;
+    Cesium.RequestScheduler.maximumRequests = MAP_MAXIMUM_REQUESTS;
+    Cesium.RequestScheduler.maximumRequestsPerServer =
+      MAP_MAXIMUM_REQUESTS_PER_SERVER;
 
     const viewer = new Cesium.Viewer(container, {
       animation: false,
@@ -493,8 +615,9 @@ export default function IowaTileMap() {
       sceneModePicker: false,
       selectionIndicator: false,
       timeline: false,
-      targetFrameRate: 30,
-      requestRenderMode: false,
+      targetFrameRate: ACTIVE_FLIGHT_FRAME_RATE,
+      requestRenderMode: true,
+      maximumRenderTimeChange: Number.POSITIVE_INFINITY,
       msaaSamples: 1,
     });
     viewerRef.current = viewer;
@@ -511,10 +634,11 @@ export default function IowaTileMap() {
       sceneModePicker: false,
       selectionIndicator: false,
       timeline: false,
-      targetFrameRate: 30,
+      targetFrameRate: ACTIVE_FLIGHT_FRAME_RATE,
       requestRenderMode: false,
       shouldAnimate: true,
       useDefaultRenderLoop: false,
+      orderIndependentTranslucency: false,
       msaaSamples: 2,
       skyAtmosphere: false,
       skyBox: false,
@@ -527,23 +651,17 @@ export default function IowaTileMap() {
     });
 
     viewer.scene.skyAtmosphere = undefined;
-    viewer.scene.skyBox = undefined;
-    const skyTransform = Cesium.Matrix4.getMatrix3(
-      Cesium.Transforms.localFrameToFixedFrameGenerator("east", "up")(
-        Cesium.Cartesian3.fromDegrees(CAPITOL.lng, CAPITOL.lat, CAPITOL.height),
-      ),
-      new Cesium.Matrix3(),
-    );
-    viewer.scene.primitives.add(
-      new Cesium.CubeMapPanorama({
-        sources: SUNSET_SKYBOX_SOURCES,
-        transform: skyTransform,
-      }),
-    );
+    // A real skybox renders behind 3D Tiles. CubeMapPanorama is a scene
+    // primitive and could intersect the depth/render pipeline as tiles arrived.
+    viewer.scene.skyBox = new Cesium.SkyBox({
+      sources: SUNSET_SKYBOX_SOURCES,
+    });
     viewer.resolutionScale = 1;
     cleanDroneViewer.scene.backgroundColor = Cesium.Color.TRANSPARENT;
     cleanDroneViewer.scene.skyAtmosphere = undefined;
     cleanDroneViewer.scene.skyBox = undefined;
+    cleanDroneViewer.scene.highDynamicRange = false;
+    cleanDroneViewer.scene.fog.enabled = false;
     cleanDroneViewer.resolutionScale = 1;
     cleanDroneViewer.scene.postProcessStages.fxaa.enabled = false;
     (cleanDroneViewer.cesiumWidget.creditContainer as HTMLElement).style.display =
@@ -564,8 +682,22 @@ export default function IowaTileMap() {
 
     let isDestroyed = false;
     let tileset: Cesium.Cesium3DTileset | undefined;
+    let hasVisibleMapContent = false;
     let flightAudio: FlightAudio | undefined;
     let flightAudioPromise: Promise<FlightAudio> | undefined;
+    let flightAudioMuted = getStoredAudioMuted();
+
+    function handleAudioMuted(event: Event) {
+      flightAudioMuted = Boolean((event as CustomEvent<boolean>).detail);
+      if (flightAudio) {
+        flightAudio.windGain.gain.setTargetAtTime(
+          flightAudioMuted ? 0 : flightAudio.windGain.gain.value,
+          flightAudio.context.currentTime,
+          0.04,
+        );
+      }
+    }
+    window.addEventListener(AUDIO_MUTED_EVENT, handleAudioMuted);
 
     function startFlightAudio() {
       if (flightAudio) {
@@ -596,73 +728,84 @@ export default function IowaTileMap() {
       void flightAudioPromise.catch(() => undefined);
     }
 
-    void Cesium.Cesium3DTileset.fromUrl("/api/google-3d/root.json", {
+    function showMapQuotaNotice() {
+      setIsQuotaReached(true);
+    }
+
+    void Cesium.Cesium3DTileset.fromUrl(
+      "/api/google-3d/root.json?appSession=2026-09-05-quota-refresh-3",
+      {
         showCreditsOnScreen: true,
-        maximumScreenSpaceError: 22,
-        cacheBytes: 96 * 1024 * 1024,
-        maximumCacheOverflowBytes: 24 * 1024 * 1024,
+        maximumScreenSpaceError: 24,
+        cacheBytes: 384 * 1024 * 1024,
+        maximumCacheOverflowBytes: 128 * 1024 * 1024,
         cullWithChildrenBounds: true,
         cullRequestsWhileMoving: true,
-        cullRequestsWhileMovingMultiplier: 80,
-        progressiveResolutionHeightFraction: 0.45,
+        cullRequestsWhileMovingMultiplier: 60,
+        progressiveResolutionHeightFraction: 0.35,
         foveatedScreenSpaceError: true,
-        foveatedConeSize: 0.45,
+        foveatedConeSize: 0.35,
         foveatedMinimumScreenSpaceErrorRelaxation: 8,
         foveatedTimeDelay: 0.25,
         dynamicScreenSpaceError: true,
-        dynamicScreenSpaceErrorDensity: 0.00278,
-        dynamicScreenSpaceErrorFactor: 16,
-        skipLevelOfDetail: true,
-        baseScreenSpaceError: 1024,
-        skipScreenSpaceErrorFactor: 16,
-        skipLevels: 1,
+        dynamicScreenSpaceErrorDensity: 0.004,
+        dynamicScreenSpaceErrorFactor: 20,
+        skipLevelOfDetail: false,
         loadSiblings: false,
+        preloadWhenHidden: false,
         preloadFlightDestinations: false,
-      })
+      },
+    )
       .then((loadedTileset) => {
         if (isDestroyed) {
           loadedTileset.destroy();
           return;
         }
 
-        let quotaFailureCount = 0;
-        let stopScheduled = false;
-
+        loadedTileset.tileVisible.addEventListener(() => {
+          if (!hasVisibleMapContent) {
+            hasVisibleMapContent = true;
+            setIsQuotaReached(false);
+          }
+        });
         loadedTileset.tileFailed.addEventListener(
           (error: { message?: string }) => {
-            if (!/Status Code: (429|502)/.test(error.message ?? "")) {
-              return;
+            if (
+              !hasVisibleMapContent &&
+              /status code:\s*429/i.test(error.message ?? "")
+            ) {
+              showMapQuotaNotice();
             }
-
-            quotaFailureCount += 1;
-
-            if (quotaFailureCount < 2 || stopScheduled) {
-              return;
-            }
-
-            stopScheduled = true;
-            window.setTimeout(() => {
-              if (tileset !== loadedTileset || loadedTileset.isDestroyed()) {
-                return;
-              }
-
-              viewer.scene.primitives.remove(loadedTileset);
-              tileset = undefined;
-            }, 0);
           },
         );
 
         tileset = loadedTileset;
         viewer.scene.primitives.add(loadedTileset);
       })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (/status(?: code)?:\s*429/i.test(String(error))) {
+          showMapQuotaNotice();
+        }
+      });
 
-    const activeKeys = new Set<string>();
-    const drone = {
+    const savedJourneyCheckpoint = loadJourneyCheckpoint();
+    let latestJourneyCheckpoint: JourneyCheckpoint | undefined =
+      savedJourneyCheckpoint;
+    const initialDronePosition = savedJourneyCheckpoint?.position ?? {
       lat: DRONE_START.lat,
       lng: DRONE_START.lng,
       height: DRONE_START.height,
       heading: Cesium.Math.toRadians(74.5),
+    };
+    boostChargesRef.current = savedJourneyCheckpoint?.boostCharges ?? 0;
+    setBoostStatus({
+      charges: boostChargesRef.current,
+      active: false,
+    });
+
+    const activeKeys = new Set<string>();
+    const drone = {
+      ...initialDronePosition,
       pitch: 0,
       roll: 0,
     };
@@ -734,54 +877,10 @@ export default function IowaTileMap() {
       new Cesium.PointPrimitiveCollection(),
     );
     const speedParticles: SpeedParticle[] = [];
-    const roadRoute = densifyRoute(
-      CAPITOL_TO_RAILROAD_BRIDGE_ROUTE,
-      ROAD_TRAIL_SAMPLE_SPACING,
-    );
-    let roadTrailPositions = roadRoute.map((point) =>
-      Cesium.Cartesian3.fromDegrees(point.lng, point.lat, CAPITOL.height),
-    );
     let particleSpawnAccumulator = 0;
-    let roadTrailRefreshAccumulator = 0;
-    let roadTrailRefreshesRemaining = ROAD_TRAIL_REFRESH_LIMIT;
-
-    viewer.entities.add({
-      polyline: {
-        positions: new Cesium.CallbackProperty(() => roadTrailPositions, false),
-        width: 7,
-        arcType: Cesium.ArcType.NONE,
-        material: new Cesium.PolylineGlowMaterialProperty({
-          color: Cesium.Color.fromCssColorString("#36f7ff").withAlpha(0.95),
-          glowPower: 0.28,
-          taperPower: 0.6,
-        }),
-      },
-    });
-
-    function refreshRoadTrailPositions() {
-      if (!tileset) {
-        return;
-      }
-
-      roadTrailPositions = roadRoute.map((point, index) => {
-        const surfaceHeight = tileset?.getHeight(
-          Cesium.Cartographic.fromDegrees(point.lng, point.lat),
-          viewer.scene,
-        );
-        const previousCartographic = Cesium.Cartographic.fromCartesian(
-          roadTrailPositions[index],
-        );
-        const height =
-          typeof surfaceHeight === "number"
-            ? surfaceHeight + ROAD_TRAIL_SURFACE_OFFSET_METERS
-            : previousCartographic.height;
-
-        return Cesium.Cartesian3.fromDegrees(point.lng, point.lat, height);
-      });
-    }
 
     if (viewer.camera.frustum instanceof Cesium.PerspectiveFrustum) {
-      viewer.camera.frustum.fov = Cesium.Math.toRadians(58);
+      viewer.camera.frustum.fov = Cesium.Math.toRadians(48);
     }
 
     const cameraTarget = new Cesium.Cartesian3();
@@ -806,6 +905,7 @@ export default function IowaTileMap() {
       viewer.camera.lookAt(cameraTarget, cameraOffset);
       viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
       viewer.camera.twistLeft(cameraRoll);
+      viewer.scene.requestRender();
       cleanDroneViewer.camera.setView({
         destination: viewer.camera.positionWC,
         orientation: {
@@ -818,7 +918,25 @@ export default function IowaTileMap() {
 
     setCameraOnDrone();
 
+    let currentFrameRate = ACTIVE_FLIGHT_FRAME_RATE;
+    let lastFlightActivityAt = performance.now();
+
+    function setFlightFrameRate(frameRate: number) {
+      if (currentFrameRate === frameRate) {
+        return;
+      }
+
+      currentFrameRate = frameRate;
+      viewer.targetFrameRate = frameRate;
+    }
+
+    function markFlightActive() {
+      lastFlightActivityAt = performance.now();
+      setFlightFrameRate(ACTIVE_FLIGHT_FRAME_RATE);
+    }
+
     function setKey(event: KeyboardEvent, isDown: boolean) {
+      if (journey.locked) return;
       const target = event.target;
 
       if (
@@ -844,6 +962,7 @@ export default function IowaTileMap() {
 
         if (isDown) {
           activeKeys.add(key);
+          markFlightActive();
         } else {
           activeKeys.delete(key);
         }
@@ -852,6 +971,13 @@ export default function IowaTileMap() {
 
     function handleKeyDown(event: KeyboardEvent) {
       startFlightAudio();
+
+      if (event.key.toLowerCase() === "b" && !event.repeat) {
+        event.preventDefault();
+        activateBoost();
+        return;
+      }
+
       setKey(event, true);
     }
 
@@ -877,30 +1003,117 @@ export default function IowaTileMap() {
     let forwardVelocityMetersPerSecond = 0;
     let verticalVelocityMetersPerSecond = 0;
     let turnVelocityRadiansPerSecond = 0;
-    let floorHeightMeters = LOW_ALTITUDE_CLEARANCE_METERS;
-    let targetFloorHeightMeters = LOW_ALTITUDE_CLEARANCE_METERS;
-    let surfaceHeightSampleAccumulator =
-      SURFACE_HEIGHT_SAMPLE_INTERVAL_SECONDS;
-    let displayedAltitudeFeet = drone.height * 3.28084;
-    let altitudeGaugeBaselineFeet = displayedAltitudeFeet;
-    const droneSurfaceCartographic = new Cesium.Cartographic();
+    let altitudeReferenceHeightMeters = drone.height;
+    let minimumDroneHeightMeters =
+      altitudeReferenceHeightMeters - MAXIMUM_DESCENT_FROM_START_METERS;
+    let displayedAltitudeFeet = START_FLIGHT_ALTITUDE_FEET;
+
+    function awardBoost() {
+      boostChargesRef.current = Math.min(3, boostChargesRef.current + 1);
+      setBoostStatus({
+        charges: boostChargesRef.current,
+        active: boostActiveRef.current,
+      });
+    }
+
+    function activateBoost() {
+      if (
+        journey.locked ||
+        boostActiveRef.current ||
+        boostChargesRef.current < 1
+      ) {
+        return;
+      }
+
+      boostChargesRef.current -= 1;
+      if (latestJourneyCheckpoint) {
+        latestJourneyCheckpoint = {
+          ...latestJourneyCheckpoint,
+          boostCharges: boostChargesRef.current,
+        };
+        saveJourneyCheckpoint(latestJourneyCheckpoint);
+      }
+      boostActiveRef.current = true;
+      boostActiveUntilRef.current = performance.now() + 8_000;
+      setBoostStatus({ charges: boostChargesRef.current, active: true });
+      markFlightActive();
+    }
+
+    activateBoostRef.current = activateBoost;
+
+    const journey = createJourneyController({
+      viewer,
+      drone,
+      onStatus: setJourneyStatus,
+      onCorrectAnswer: awardBoost,
+      resumeCheckpoint: savedJourneyCheckpoint,
+      onLandmarkCompleted: (completed, position) => {
+        latestJourneyCheckpoint = {
+          completed,
+          position,
+          boostCharges: boostChargesRef.current,
+        };
+        saveJourneyCheckpoint(latestJourneyCheckpoint);
+      },
+      surfaceHeight: (lat, lng) => tileset?.getHeight(Cesium.Cartographic.fromDegrees(lng, lat), viewer.scene),
+      setFlightVisible: (visible) => {
+        droneOverlayContainer.style.visibility = visible ? "visible" : "hidden";
+        particlePoints.show = visible;
+        activeKeys.clear();
+        forwardVelocityMetersPerSecond = 0;
+        verticalVelocityMetersPerSecond = 0;
+        turnVelocityRadiansPerSecond = 0;
+        markFlightActive();
+      },
+      warp: (position) => {
+        Object.assign(drone, position, { pitch: 0, roll: 0 });
+        Object.assign(cameraFollow, { lat: drone.lat, lng: drone.lng, height: drone.height });
+        cameraHeading = drone.heading;
+        cameraPitch = CAMERA_PITCH_RADIANS;
+        cameraRoll = 0;
+        altitudeReferenceHeightMeters = drone.height;
+        minimumDroneHeightMeters = drone.height - MAXIMUM_DESCENT_FROM_START_METERS;
+        displayedAltitudeFeet = START_FLIGHT_ALTITUDE_FEET;
+        activeKeys.clear();
+        forwardVelocityMetersPerSecond = verticalVelocityMetersPerSecond = turnVelocityRadiansPerSecond = 0;
+        setCameraOnDrone();
+      },
+    });
+    function handleVisibilityChange() {
+      const isVisible = !document.hidden;
+
+      viewer.useDefaultRenderLoop = isVisible;
+
+      if (isVisible) {
+        lastTick = performance.now();
+        markFlightActive();
+        viewer.scene.requestRender();
+        if (!journey.locked) setCameraOnDrone();
+      } else if (flightAudio) {
+        void flightAudio.context.suspend();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     teleportDroneRef.current = (destination) => {
+      if (journey.locked) return;
       const iowaDestination = clampToBounds(destination, IOWA_BOUNDS);
       flightBounds = IOWA_BOUNDS;
       drone.lat = iowaDestination.lat;
       drone.lng = iowaDestination.lng;
-      drone.height = Math.max(drone.height, 600);
-      altitudeGaugeBaselineFeet = drone.height * 3.28084;
+      drone.height = Math.max(drone.height, DRONE_START.height);
+      altitudeReferenceHeightMeters = drone.height;
+      minimumDroneHeightMeters =
+        altitudeReferenceHeightMeters - MAXIMUM_DESCENT_FROM_START_METERS;
+      displayedAltitudeFeet = START_FLIGHT_ALTITUDE_FEET;
       cameraFollow.lat = drone.lat;
       cameraFollow.lng = drone.lng;
       cameraFollow.height = drone.height;
       forwardVelocityMetersPerSecond = 0;
       verticalVelocityMetersPerSecond = 0;
       turnVelocityRadiansPerSecond = 0;
-      floorHeightMeters = LOW_ALTITUDE_CLEARANCE_METERS;
-      targetFloorHeightMeters = LOW_ALTITUDE_CLEARANCE_METERS;
-      surfaceHeightSampleAccumulator = SURFACE_HEIGHT_SAMPLE_INTERVAL_SECONDS;
       activeKeys.clear();
+      markFlightActive();
       setCameraOnDrone();
     };
 
@@ -1009,8 +1222,25 @@ export default function IowaTileMap() {
       const deltaSeconds = Math.min((now - lastTick) / 1000, 0.08);
       lastTick = now;
       flightTimeSeconds += deltaSeconds;
+      journey.tick(deltaSeconds);
 
-      const speedMultiplier = activeKeys.has("shift") ? DRONE_FAST_MULTIPLIER : 1;
+      if (boostActiveRef.current && now >= boostActiveUntilRef.current) {
+        boostActiveRef.current = false;
+        setBoostStatus({ charges: boostChargesRef.current, active: false });
+      }
+
+      if (journey.locked) {
+        // Cinematics and question-stage camera movement still animate in
+        // explicit render mode, while ordinary idle flight remains still.
+        viewer.scene.requestRender();
+        setFlightFrameRate(journey.isResting ? IDLE_FLIGHT_FRAME_RATE : ACTIVE_FLIGHT_FRAME_RATE);
+        if (flightAudio) flightAudio.windGain.gain.setTargetAtTime(0, flightAudio.context.currentTime, 0.2);
+        return;
+      }
+
+      const speedMultiplier =
+        (activeKeys.has("shift") ? DRONE_FAST_MULTIPLIER : 1) *
+        (boostActiveRef.current ? 1.45 : 1);
       let targetForwardVelocityMetersPerSecond = 0;
       let targetVerticalVelocityMetersPerSecond = 0;
       let targetTurnVelocityRadiansPerSecond = 0;
@@ -1089,6 +1319,25 @@ export default function IowaTileMap() {
         verticalVelocityMetersPerSecond *= verticalDrag;
       }
 
+      const hasFlightInput =
+        activeKeys.has("w") ||
+        activeKeys.has("a") ||
+        activeKeys.has("s") ||
+        activeKeys.has("d") ||
+        activeKeys.has("q") ||
+        activeKeys.has("e");
+      const isDroneMoving =
+        Math.abs(forwardVelocityMetersPerSecond) > 0.08 ||
+        Math.abs(verticalVelocityMetersPerSecond) > 0.04 ||
+        Math.abs(turnVelocityRadiansPerSecond) > Cesium.Math.toRadians(0.08);
+
+      if (hasFlightInput || isDroneMoving) {
+        lastFlightActivityAt = now;
+        setFlightFrameRate(ACTIVE_FLIGHT_FRAME_RATE);
+      } else if (now - lastFlightActivityAt >= IDLE_FRAME_RATE_DELAY_MS) {
+        setFlightFrameRate(IDLE_FLIGHT_FRAME_RATE);
+      }
+
       drone.heading += turnVelocityRadiansPerSecond * deltaSeconds;
       drone.height += verticalVelocityMetersPerSecond * deltaSeconds;
 
@@ -1103,48 +1352,11 @@ export default function IowaTileMap() {
         );
       }
 
-      surfaceHeightSampleAccumulator += deltaSeconds;
-      if (
-        surfaceHeightSampleAccumulator >=
-        SURFACE_HEIGHT_SAMPLE_INTERVAL_SECONDS
-      ) {
-        Cesium.Cartographic.fromDegrees(
-          drone.lng,
-          drone.lat,
-          0,
-          droneSurfaceCartographic,
-        );
-        const surfaceHeight = tileset?.getHeight(
-          droneSurfaceCartographic,
-          viewer.scene,
-        );
-        targetFloorHeightMeters =
-          typeof surfaceHeight === "number"
-            ? surfaceHeight + LOW_ALTITUDE_CLEARANCE_METERS
-            : LOW_ALTITUDE_CLEARANCE_METERS;
-        surfaceHeightSampleAccumulator = 0;
-      }
-
-      floorHeightMeters = Cesium.Math.lerp(
-        floorHeightMeters,
-        targetFloorHeightMeters,
-        1 - Math.exp(-4.5 * deltaSeconds),
-      );
-
-      if (drone.height < floorHeightMeters) {
-        const lowAltitudeDeficit = floorHeightMeters - drone.height;
-        const pushSpeed =
-          LOW_ALTITUDE_PUSH_SPEED_METERS_PER_SECOND +
-          lowAltitudeDeficit * LOW_ALTITUDE_PUSH_STIFFNESS;
-
+      if (drone.height < minimumDroneHeightMeters) {
+        drone.height = minimumDroneHeightMeters;
         verticalVelocityMetersPerSecond = Math.max(
           verticalVelocityMetersPerSecond,
-          pushSpeed,
-        );
-        drone.height = Cesium.Math.lerp(
-          drone.height,
-          floorHeightMeters,
-          1 - Math.exp(-5 * deltaSeconds),
+          0,
         );
       }
 
@@ -1241,9 +1453,10 @@ export default function IowaTileMap() {
       );
       const targetCameraPitch =
         CAMERA_PITCH_RADIANS +
-        drone.roll * CAMERA_PITCH_INFLUENCE +
+        drone.roll * CAMERA_PITCH_INFLUENCE * movementAmount +
         verticalCameraAmount * Cesium.Math.toRadians(5);
-      const targetCameraRoll = drone.pitch * CAMERA_ROLL_INFLUENCE;
+      const targetCameraRoll =
+        drone.pitch * CAMERA_ROLL_INFLUENCE * movementAmount;
       const cameraAttitudeBlend =
         1 - Math.exp(-CAMERA_ATTITUDE_FOLLOW_RATE * deltaSeconds);
       cameraPitch = Cesium.Math.lerp(
@@ -1329,7 +1542,7 @@ export default function IowaTileMap() {
         );
 
         flightAudio.windGain.gain.setTargetAtTime(
-          0.008 + windAmount * 0.24,
+          flightAudioMuted ? 0 : 0.008 + windAmount * 0.24,
           audioTime,
           0.14,
         );
@@ -1345,22 +1558,15 @@ export default function IowaTileMap() {
         );
       }
 
-      if (tileset && roadTrailRefreshesRemaining > 0) {
-        roadTrailRefreshAccumulator += deltaSeconds;
-        if (
-          roadTrailRefreshAccumulator >=
-          ROAD_TRAIL_REFRESH_INTERVAL_SECONDS
-        ) {
-          refreshRoadTrailPositions();
-          roadTrailRefreshesRemaining -= 1;
-          roadTrailRefreshAccumulator = 0;
-        }
-      }
-
       if (altitudeReadout) {
         displayedAltitudeFeet = Cesium.Math.lerp(
           displayedAltitudeFeet,
-          drone.height * 3.28084,
+          Math.max(
+            MINIMUM_FLIGHT_ALTITUDE_FEET,
+            START_FLIGHT_ALTITUDE_FEET +
+              (drone.height - altitudeReferenceHeightMeters) *
+                DISPLAYED_FEET_PER_WORLD_METER,
+          ),
           1 - Math.exp(-5 * deltaSeconds),
         );
         altitudeReadout.textContent = Math.round(
@@ -1368,10 +1574,10 @@ export default function IowaTileMap() {
         ).toLocaleString();
 
         if (altitudeRev) {
-          const altitudeChangeFeet =
-            displayedAltitudeFeet - altitudeGaugeBaselineFeet;
           const altitudeLevel = clamp(
-            Math.trunc(altitudeChangeFeet / 50) + 1,
+            Math.floor(
+              (displayedAltitudeFeet - ALTITUDE_GAUGE_START_FEET) / 50,
+            ) + 1,
             0,
             8,
           );
@@ -1382,19 +1588,22 @@ export default function IowaTileMap() {
       }
 
       if (speedReadout) {
+        const speedometerMaximum = boostActiveRef.current ? 128 : 88;
         const indicatedSpeedMilesPerHour = clamp(
           (Math.abs(forwardVelocityMetersPerSecond) /
             DRONE_SPEED_METERS_PER_SECOND) *
             42,
           0,
-          88,
+          speedometerMaximum,
         );
         speedReadout.textContent = Math.round(indicatedSpeedMilesPerHour)
           .toString()
           .padStart(2, "0");
 
         if (speedRev) {
-          const speedLevel = Math.ceil((indicatedSpeedMilesPerHour / 88) * 8);
+          const speedLevel = Math.ceil(
+            (indicatedSpeedMilesPerHour / speedometerMaximum) * 8,
+          );
           speedRev.querySelectorAll("i").forEach((dot, index) => {
             dot.toggleAttribute("data-active", index < speedLevel);
           });
@@ -1407,17 +1616,41 @@ export default function IowaTileMap() {
         compassNeedleRef.current.style.transform = `translate(-50%, -50%) rotate(${-headingDegrees}deg)`;
       }
 
-      setCameraOnDrone();
+      const isCameraSettling =
+        Math.abs(cameraFollow.lat - drone.lat) > 0.00000001 ||
+        Math.abs(cameraFollow.lng - drone.lng) > 0.00000001 ||
+        Math.abs(cameraFollow.height - drone.height) > 0.01 ||
+        Math.abs(Cesium.Math.negativePiToPi(drone.heading - cameraHeading)) >
+          Cesium.Math.toRadians(0.01) ||
+        Math.abs(cameraPitch - targetCameraPitch) >
+          Cesium.Math.toRadians(0.01) ||
+        Math.abs(cameraRoll - targetCameraRoll) >
+          Cesium.Math.toRadians(0.01) ||
+        Math.abs(cameraRange - targetCameraRange) > 0.01;
+
+      if (hasFlightInput || isDroneMoving || isCameraSettling) {
+        setCameraOnDrone();
+      } else {
+        // Keep the drone's hover animation while leaving the map camera still.
+        cleanDroneViewer.render();
+      }
     });
 
     return () => {
       isDestroyed = true;
       removeTick();
+      journey.destroy();
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener(AUDIO_MUTED_EVENT, handleAudioMuted);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       activeKeys.clear();
+      boostChargesRef.current = 0;
+      boostActiveRef.current = false;
+      boostActiveUntilRef.current = 0;
+      activateBoostRef.current = null;
       teleportDroneRef.current = null;
       if (flightAudio) {
         flightAudio.windSource.stop();
@@ -1432,6 +1665,9 @@ export default function IowaTileMap() {
       gradeStageRef.current = undefined;
       pixelStageRef.current = undefined;
       farBlurStageRef.current = undefined;
+      Cesium.RequestScheduler.maximumRequests = previousMaximumRequests;
+      Cesium.RequestScheduler.maximumRequestsPerServer =
+        previousMaximumRequestsPerServer;
     };
   }, []);
 
@@ -1439,6 +1675,68 @@ export default function IowaTileMap() {
     <main className="fixed inset-0 overflow-hidden bg-black">
       <div ref={cesiumRef} className="absolute inset-0" />
       <div ref={droneOverlayRef} className="pointer-events-none absolute inset-0 z-10" />
+      <details
+        className="api-stats-menu absolute right-3 top-3 z-20 text-white sm:right-5"
+        onToggle={(event) => setIsApiStatsOpen(event.currentTarget.open)}
+      >
+        <summary aria-label="Open settings" title="Settings">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Zm8.1 3.6-.1-1.1 2-1.5-2-3.4-2.4 1a8.2 8.2 0 0 0-1.9-1.1L15.4 3h-4l-.4 2.6c-.7.3-1.3.6-1.9 1.1L6.7 5.6l-2 3.4 2 1.6a8.5 8.5 0 0 0 0 2.2l-2 1.6 2 3.4 2.4-1.1c.6.5 1.2.8 1.9 1.1l.4 2.6h4l.4-2.6c.7-.3 1.3-.6 1.9-1.1l2.4 1.1 2-3.4-2-1.5.1-1.1Z" />
+          </svg>
+        </summary>
+        <aside aria-label="Settings and monthly Google API statistics" aria-live="polite">
+          <div className="api-settings__heading">Settings</div>
+          <button
+            type="button"
+            className="api-settings__mute"
+            aria-pressed={isAudioMuted}
+            onClick={toggleAudioMuted}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+              {isAudioMuted
+                ? <path d="m17 9 4 4m0-4-4 4" />
+                : <path d="M16 9.5c1.4 1.4 1.4 3.6 0 5m2.5-7.5c2.8 2.8 2.8 7.2 0 10" />}
+            </svg>
+            <span>{isAudioMuted ? "Unmute audio" : "Mute audio"}</span>
+          </button>
+          <div className="api-call-tracker__heading">
+            <strong>Monthly usage</strong>
+            <span>{googleApiUsage?.month ?? "Loading"}</span>
+          </div>
+          <div className="api-call-tracker__row">
+            <span>Root</span>
+            <output>
+              {googleApiUsage
+                ? `${googleApiUsage.counts.root.toLocaleString()} / ${googleApiUsage.limits.root.toLocaleString()}`
+                : "..."}
+            </output>
+          </div>
+          <div className="api-call-tracker__row">
+            <span>Render</span>
+            <output>
+              {googleApiUsage
+                ? `${googleApiUsage.counts.render.toLocaleString()} / ${googleApiUsage.limits.render.toLocaleString()}`
+                : "..."}
+            </output>
+          </div>
+        </aside>
+      </details>
+      {isQuotaReached && (
+        <section
+          className="journey-panel quota-limit-notice pointer-events-none absolute left-1/2 top-1/2 z-[2147483647] w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 px-7 py-6 text-white sm:px-10 sm:py-8"
+          role="alert"
+          aria-live="assertive"
+        >
+          <p className="quota-limit-notice__eyebrow">Map status</p>
+          <h1>The map has reached its API limit.</h1>
+          <p>
+            Sorry, a lot of people are using Iowa From Above right now, and we do
+            not have funding to raise the API limit. Please try again early
+            tomorrow.
+          </p>
+        </section>
+      )}
       <div
         className={`location-search absolute left-3 top-3 z-20 flex h-9 font-mono text-xs text-white/90 transition-[width] duration-200 ease-out sm:left-5 ${
           isAddressOpen
@@ -1504,31 +1802,164 @@ export default function IowaTileMap() {
       </div>
       <div
         aria-live="polite"
-        className={`pointer-events-none absolute left-3 top-14 z-20 max-w-[min(18rem,calc(100vw-1.5rem))] rounded bg-black/35 px-2 py-1 font-mono text-[10px] text-white/80 backdrop-blur-sm transition-opacity sm:left-5 ${
+        className={`clay-toast pointer-events-none absolute left-3 top-14 z-20 max-w-[min(18rem,calc(100vw-1.5rem))] px-2 py-1 font-mono text-[10px] text-white/80 transition-opacity sm:left-5 ${
           isAddressOpen && addressMessage ? "opacity-100" : "opacity-0"
         }`}
       >
-        {addressMessage}
+        <span>{addressMessage}</span>
       </div>
-      <aside
-        aria-label="Journey notifications"
-        className="journey-panel pointer-events-none absolute bottom-7 right-3 z-20 min-h-28 w-[min(21rem,calc(100vw-1.5rem))] pb-4 pl-6 pr-8 pt-4 text-white sm:right-5"
-      >
+      {journeyStatus.phase === "complete" && (
+        <OutroSequence
+          onReplay={() => {
+            clearJourneyCheckpoint();
+            window.location.reload();
+          }}
+          onVisitAddress={openAddressSearchFromJourneyPrompt}
+        />
+      )}
+      {journeyStatus.phase === "cinematic" && (
+        <aside
+          aria-label={`Exhibit notes for ${currentExhibit.name}`}
+          className="exhibit-peek journey-panel journey-panel--reverse absolute left-3 top-1/2 z-20 w-[min(18rem,calc(100vw-1.5rem))] -translate-y-1/2 px-6 py-5 text-white sm:left-5"
+        >
+          <h2>{currentExhibit.name}</h2>
+          <ul>
+            <li>{currentExhibit.summary}</li>
+            <li>{currentExhibit.funFact}</li>
+            <li>{currentExhibit.statistic.value} {currentExhibit.statistic.label}. {currentExhibit.statistic.detail}</li>
+          </ul>
+          <a
+            className="exhibit-peek__read-more"
+            href={`/exhibits/${currentExhibit.id}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Read more
+          </a>
+        </aside>
+      )}
+      {journeyStatus.phase === "cinematic" && (
+        <LandmarkChat key={currentExhibit.id} exhibit={currentExhibit} />
+      )}
+      <div className="journey-dock absolute bottom-7 right-3 z-20 flex flex-col items-end gap-3 sm:right-5">
+        <div
+          className={`journey-boost-dock mr-5 ${boostStatus.active ? "journey-boost-dock--active" : ""}`}
+          aria-label={`${boostStatus.charges} of 3 flight boosts ready${boostStatus.active ? ", boost active" : ""}`}
+        >
+        {Array.from({ length: 3 }, (_, index) => {
+          const isFilled = index < boostStatus.charges;
+
+          return (
+            <button
+              key={index}
+              type="button"
+              className="journey-boost-slot"
+              data-filled={isFilled ? "" : undefined}
+              disabled={!isFilled || boostStatus.active}
+              aria-label={isFilled ? "Use flight boost" : "Empty boost slot"}
+              title={isFilled ? "Use speed boost (B)" : "Answer correctly to earn a boost"}
+              onClick={() => activateBoostRef.current?.()}
+            >
+              {isFilled && <span aria-hidden="true">🔥</span>}
+            </button>
+          );
+        })}
+        </div>
+        <aside
+          aria-label="Journey notifications"
+          className="journey-card journey-panel pointer-events-none relative min-h-28 w-[min(21rem,calc(100vw-1.5rem))] pb-4 pl-6 pr-8 pt-4 text-white"
+        >
         <p className="text-sm font-medium tracking-normal text-white/70 sm:text-base">
           Journey
         </p>
         <div className="mt-2 flex items-baseline justify-between gap-4 border-b border-white/10 pb-3">
           <span className="text-sm text-white/65">Landmarks explored</span>
           <strong className="font-mono text-sm font-medium tabular-nums text-white">
-            0/12
+            {journeyStatus.completed}/{JOURNEY_STOPS.length}
           </strong>
         </div>
         <div className="mt-3">
           <p className="text-sm leading-5 tracking-normal text-white">
-            Travel to the next landmark
+            {journeyStatus.phase === "tutorial"
+              ? "Complete the tutorial to begin"
+              : journeyStatus.phase === "complete"
+                ? "Iowa explored. Keep flying."
+                : journeyStatus.phase === "portal"
+                  ? "Travel to the portal"
+                  : journeyStatus.phase === "navigate"
+                    ? `Travel to ${JOURNEY_STOPS[journeyStatus.index].name}`
+                    : JOURNEY_STOPS[journeyStatus.index].name}
           </p>
+          {(journeyStatus.phase === "navigate" || journeyStatus.phase === "portal") && <p className="mt-1 text-xs text-white/60">{journeyStatus.direction} · {journeyStatus.distance.toLocaleString()} m · {journeyStatus.phase === "portal" ? "Enter the portal" : "Follow the purple line"}</p>}
+          {journeyStatus.phase === "complete" && (
+            <button
+              type="button"
+              className="journey-restart pointer-events-auto mt-3 w-full px-3 py-2 text-sm"
+              onClick={() => {
+                clearJourneyCheckpoint();
+                window.location.reload();
+              }}
+            >
+              Restart your journey
+            </button>
+          )}
         </div>
-      </aside>
+        </aside>
+        <div className="mobile-journey-objective" aria-live="polite">
+          {journeyStatus.phase === "portal"
+            ? "Portal"
+            : journeyStatus.phase === "navigate"
+              ? JOURNEY_STOPS[journeyStatus.index].name
+              : journeyStatus.phase === "complete"
+                ? "Journey complete"
+                : ""}
+        </div>
+      </div>
+      {journeyStatus.phase === "cinematic" && (
+        <button
+          type="button"
+          aria-label="Hold to skip the landmark narration"
+          className="cinematic-skip-control absolute bottom-5 left-1/2 z-30 -translate-x-1/2"
+          onPointerDown={startCinematicSkip}
+          onPointerUp={cancelCinematicSkip}
+          onPointerCancel={cancelCinematicSkip}
+          onPointerLeave={cancelCinematicSkip}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <span>Hold to skip</span>
+          <span className="cinematic-skip-control__track" aria-hidden="true">
+            <i
+              className={isCinematicSkipHolding ? "is-holding" : ""}
+              style={{ transitionDuration: isCinematicSkipHolding ? `${CINEMATIC_SKIP_HOLD_MS}ms` : "0ms" }}
+            />
+          </span>
+        </button>
+      )}
+      {journeyStatus.phase === "question" && (
+        <section aria-label="Landmark question controls" className="journey-question absolute left-1/2 top-1/2 z-30 w-[min(18rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 px-5 py-4 text-white">
+          <p className="text-xs font-medium text-white/55">Quick question</p>
+          <p className="mt-1.5 text-sm leading-5">{JOURNEY_STOPS[journeyStatus.index].question}</p>
+          {JOURNEY_STOPS[journeyStatus.index].choices.map((choice, index) => {
+            const isSelected = journeyStatus.selectedAnswer === index;
+            const isCorrect = isSelected && journeyStatus.answerCorrect;
+            const isWrong = isSelected && journeyStatus.answerCorrect === false;
+
+            return (
+              <button
+                key={choice}
+                className={`journey-answer mt-2 block w-full px-3 py-2 text-left text-xs ${isCorrect ? "journey-answer--correct" : ""} ${isWrong ? "journey-answer--wrong" : ""}`}
+                onClick={() => window.dispatchEvent(new CustomEvent("iowa-journey-action", { detail: String(index) }))}
+              >
+                <span>{index + 1}</span>{choice}{isCorrect && <b aria-hidden="true">✓</b>}
+              </button>
+            );
+          })}
+          <p aria-live="polite" className={`mt-2 text-xs leading-4 ${journeyStatus.answerCorrect ? "text-emerald-300" : "text-white/65"}`}>{journeyStatus.feedback}</p>
+          <a className="mt-2 block text-xs text-white/60 underline" href={`/exhibits/${currentExhibit.id}`} target="_blank" rel="noreferrer">Explore this stop&apos;s history</a>
+          {journeyStatus.completed > journeyStatus.index && <button className="journey-question__continue mt-2 w-full px-3 py-2 text-xs" onClick={() => window.dispatchEvent(new CustomEvent("iowa-journey-action", { detail: "next" }))}>Continue · Enter</button>}
+        </section>
+      )}
+      {journeyStatus.phase === "transfer" && <div className="pointer-events-none absolute inset-0 z-40 grid place-items-center bg-black text-white"><p className="max-w-3xl px-6 text-center font-serif text-2xl leading-relaxed tracking-normal text-white sm:text-4xl">{journeyStatus.message}</p></div>}
       <section
         aria-label="Live flight telemetry"
         className="flight-instruments pointer-events-none absolute bottom-32 left-1/2 z-10 w-[min(25rem,calc(100vw-1rem))] -translate-x-1/2 text-white sm:bottom-10"
@@ -1546,6 +1977,13 @@ export default function IowaTileMap() {
         </div>
 
         <div className="flight-compass">
+          {journeyStatus.direction && (journeyStatus.phase === "navigate" || journeyStatus.phase === "portal") && (
+            <span
+              className={`flight-compass__target-bearing ${journeyStatus.phase === "portal" ? "flight-compass__target-bearing--portal" : ""}`}
+              style={{ transform: `rotate(${journeyStatus.targetBearing}rad)` }}
+              aria-hidden="true"
+            />
+          )}
           <div className="flight-compass__rose">
             <span className="flight-compass__cardinal flight-compass__cardinal--north">
               N
@@ -1569,7 +2007,7 @@ export default function IowaTileMap() {
 
         <div className="flight-instrument flight-instrument--altitude">
           <span className="flight-instrument__reading">
-            <output ref={altitudeReadoutRef}>811</output>
+            <output ref={altitudeReadoutRef}>1,000</output>
             <small>ft</small>
           </span>
           <div
@@ -1581,6 +2019,53 @@ export default function IowaTileMap() {
               <i key={index} />
             ))}
           </div>
+        </div>
+      </section>
+      <section className="mobile-flight-controls" aria-label="Touch flight controls">
+        <div className="mobile-altitude-controls">
+          {[
+            { key: "e", label: "Rise", icon: "↑" },
+            { key: "q", label: "Descend", icon: "↓" },
+          ].map((control) => (
+            <button
+              key={control.key}
+              type="button"
+              aria-label={control.label}
+              onPointerDown={(event) => pressMobileFlightControl(event, control.key)}
+              onPointerUp={(event) => releaseMobileFlightControl(event, control.key)}
+              onPointerCancel={(event) => releaseMobileFlightControl(event, control.key)}
+              onLostPointerCapture={() => {
+                window.dispatchEvent(new KeyboardEvent("keyup", { key: control.key, bubbles: true }));
+              }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <span aria-hidden="true">{control.icon}</span>
+            </button>
+          ))}
+        </div>
+        <div className="mobile-direction-pad">
+          {[
+            { key: "w", label: "Fly forward", icon: "▲", className: "mobile-direction-pad__forward" },
+            { key: "a", label: "Turn left", icon: "◀", className: "mobile-direction-pad__left" },
+            { key: "d", label: "Turn right", icon: "▶", className: "mobile-direction-pad__right" },
+            { key: "s", label: "Fly backward", icon: "▼", className: "mobile-direction-pad__back" },
+          ].map((control) => (
+            <button
+              key={control.key}
+              type="button"
+              className={control.className}
+              aria-label={control.label}
+              onPointerDown={(event) => pressMobileFlightControl(event, control.key)}
+              onPointerUp={(event) => releaseMobileFlightControl(event, control.key)}
+              onPointerCancel={(event) => releaseMobileFlightControl(event, control.key)}
+              onLostPointerCapture={() => {
+                window.dispatchEvent(new KeyboardEvent("keyup", { key: control.key, bubbles: true }));
+              }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <span aria-hidden="true">{control.icon}</span>
+            </button>
+          ))}
         </div>
       </section>
     </main>

@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# local API quota ledger
+/.data/
+
 # production
 /build
 

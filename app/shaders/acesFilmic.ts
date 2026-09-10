@@ -2,6 +2,10 @@
 // Source: https://github.com/mrdoob/three.js/blob/dev/src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js
 export const ACES_FILMIC_FRAGMENT_SHADER = `
   uniform sampler2D colorTexture;
+  uniform vec2 colorTextureDimensions;
+  uniform float clarity;
+  uniform float vibrance;
+  uniform float splitTone;
   uniform float acesExposure;
   uniform float acesStrength;
   uniform float brightness;
@@ -49,8 +53,26 @@ export const ACES_FILMIC_FRAGMENT_SHADER = `
 
   void main(void) {
     vec4 source = texture(colorTexture, v_textureCoordinates);
-    vec3 mapped = ACESFilmicToneMapping(source.rgb);
-    vec3 color = mix(source.rgb, mapped, acesStrength);
+    vec3 detail = source.rgb;
+    // Bounded, four-neighbor sharpening shares the existing color pass.
+    // Mobile sets clarity to zero and skips these texture reads entirely.
+    if (clarity > 0.0) {
+      vec2 texel = 1.0 / colorTextureDimensions;
+      vec3 north = texture(colorTexture, clamp(v_textureCoordinates + vec2(0.0, texel.y), vec2(0.0), vec2(1.0))).rgb;
+      vec3 south = texture(colorTexture, clamp(v_textureCoordinates - vec2(0.0, texel.y), vec2(0.0), vec2(1.0))).rgb;
+      vec3 east = texture(colorTexture, clamp(v_textureCoordinates + vec2(texel.x, 0.0), vec2(0.0), vec2(1.0))).rgb;
+      vec3 west = texture(colorTexture, clamp(v_textureCoordinates - vec2(texel.x, 0.0), vec2(0.0), vec2(1.0))).rgb;
+      vec3 localMin = min(source.rgb, min(min(north, south), min(east, west)));
+      vec3 localMax = max(source.rgb, max(max(north, south), max(east, west)));
+      vec3 highFrequency = source.rgb - (north + south + east + west) * 0.25;
+      detail = clamp(source.rgb + highFrequency * clarity, localMin, localMax);
+    }
+    vec3 color = detail;
+    // Cesium already tone maps HDR before custom stages. Avoid a second
+    // filmic curve unless a preset explicitly asks for it.
+    if (acesStrength > 0.0) {
+      color = mix(detail, ACESFilmicToneMapping(detail), acesStrength);
+    }
     float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
     float shadowMask = 1.0 - smoothstep(0.18, 0.62, luminance);
     float highlightMask = smoothstep(0.45, 0.92, luminance);
@@ -63,6 +85,16 @@ export const ACES_FILMIC_FRAGMENT_SHADER = `
     graded *= vec3(1.0 + warmth * 0.14, 1.0 + warmth * 0.035, 1.0 - warmth * 0.12);
     graded += shadowMask * shadows;
     graded += highlightMask * highlights;
+    // Bring muted terrain colors forward while protecting saturated routes
+    // and portals. Gentle split toning separates shade from sunlit surfaces.
+    float chroma = max(graded.r, max(graded.g, graded.b)) - min(graded.r, min(graded.g, graded.b));
+    float neutralMask = 1.0 - smoothstep(0.08, 0.5, chroma);
+    float gray = dot(graded, vec3(0.2126, 0.7152, 0.0722));
+    graded = mix(vec3(gray), graded, 1.0 + vibrance * neutralMask);
+    graded += splitTone * (
+      shadowMask * vec3(-0.018, 0.002, 0.024) +
+      highlightMask * vec3(0.026, 0.009, -0.018)
+    );
     graded = mix(graded, vec3(0.08, 0.10, 0.12), fade);
 
     vec2 centeredUv = v_textureCoordinates - 0.5;

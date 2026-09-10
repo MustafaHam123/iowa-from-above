@@ -1,44 +1,86 @@
 import { getCachedGoogleAsset } from "../../googleCache";
+import {
+  addGoogleVisitorCookie,
+  consumeGoogleRequestQuota,
+  getGoogleVisitor,
+  getNextGoogleDayBoundary,
+  GoogleQuotaLimitError,
+  quotaResponseHeaders,
+} from "../../googleQuota";
 
 export const runtime = "nodejs";
 
 const GOOGLE_3D_BASE_URL = "https://tile.googleapis.com/v1/3dtiles";
-const GOOGLE_REQUEST_SPACING_MS = 1_000;
-const DAILY_QUOTA_COOLDOWN_MS = 60_000;
+// Let a useful batch of visible tiles load together without opening an
+// unbounded connection flood. Cesium also applies its own client-side limit.
+const GOOGLE_MAX_CONCURRENT_REQUESTS = 8;
+const GOOGLE_3D_ROOT_CACHE_SECONDS = 3 * 60 * 60;
+const GOOGLE_3D_RENDER_CACHE_SECONDS = 30 * 24 * 60 * 60;
 
-let googleRequestGate = Promise.resolve();
-let lastGoogleRequestStartedAt = 0;
-let dailyQuotaBlockedUntil = 0;
+const googleRequestWaiters: Array<() => void> = [];
+let googleRequestsInFlight = 0;
+let googleRateLimitBlockedUntil = 0;
+let googleDailyLimitReached = false;
 
-async function waitForGoogleRequestSlot() {
-  const previousRequest = googleRequestGate;
-  let releaseRequest: () => void = () => undefined;
-
-  googleRequestGate = new Promise<void>((resolve) => {
-    releaseRequest = resolve;
-  });
-
-  await previousRequest;
-
-  const remainingDelay = Math.max(
-    0,
-    GOOGLE_REQUEST_SPACING_MS - (Date.now() - lastGoogleRequestStartedAt),
-  );
-
-  if (remainingDelay > 0) {
-    await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+class GoogleUpstreamRateLimitError extends GoogleQuotaLimitError {
+  constructor(retryAt: Date) {
+    super("google", retryAt);
+    this.name = "GoogleUpstreamRateLimitError";
   }
-
-  lastGoogleRequestStartedAt = Date.now();
-  releaseRequest();
 }
 
-const LOCAL_FLIGHT_BOUNDS = {
-  north: 41.7,
-  south: 41.48,
-  west: -93.76,
-  east: -93.46,
-};
+function googleRetryBoundary(response: Response, details: string) {
+  if (/requests per day|dailyLimitExceeded|daily quota/i.test(details)) {
+    return getNextGoogleDayBoundary();
+  }
+
+  const retryAfterSeconds = Number(response.headers.get("retry-after"));
+  const cooldownSeconds = Number.isFinite(retryAfterSeconds)
+    ? Math.min(60, Math.max(5, retryAfterSeconds))
+    : 30;
+
+  return new Date(Date.now() + cooldownSeconds * 1_000);
+}
+
+async function waitForGoogleRateLimitCooldown() {
+  const remainingDelay = googleRateLimitBlockedUntil - Date.now();
+
+  if (remainingDelay <= 0) {
+    return;
+  }
+
+  if (googleDailyLimitReached) {
+    throw new GoogleUpstreamRateLimitError(
+      new Date(googleRateLimitBlockedUntil),
+    );
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+}
+
+async function withGoogleRequestSlot<T>(task: () => Promise<T>) {
+  if (googleRequestsInFlight >= GOOGLE_MAX_CONCURRENT_REQUESTS) {
+    await new Promise<void>((resolve) => {
+      googleRequestWaiters.push(resolve);
+    });
+  } else {
+    googleRequestsInFlight += 1;
+  }
+
+  try {
+    return await task();
+  } finally {
+    const nextRequest = googleRequestWaiters.shift();
+
+    if (nextRequest) {
+      // Transfer this occupied slot directly to the oldest waiter. Keeping the
+      // count unchanged prevents a newly arriving request from cutting in.
+      nextRequest();
+    } else {
+      googleRequestsInFlight -= 1;
+    }
+  }
+}
 
 function proxyPathForGoogleUri(uri: string) {
   const absoluteUri = uri.startsWith("/")
@@ -48,89 +90,28 @@ function proxyPathForGoogleUri(uri: string) {
   return `/api/google-3d${absoluteUri.replace(/^\/v1\/3dtiles/, "")}`;
 }
 
-function regionTouchesFlightArea(region: unknown) {
-  if (!Array.isArray(region) || region.length < 4) {
-    return true;
-  }
-
-  const west = CesiumRadiansToDegrees(Number(region[0]));
-  const south = CesiumRadiansToDegrees(Number(region[1]));
-  const east = CesiumRadiansToDegrees(Number(region[2]));
-  const north = CesiumRadiansToDegrees(Number(region[3]));
-
-  if (![west, south, east, north].every(Number.isFinite)) {
-    return true;
-  }
-
-  return (
-    east >= LOCAL_FLIGHT_BOUNDS.west &&
-    west <= LOCAL_FLIGHT_BOUNDS.east &&
-    north >= LOCAL_FLIGHT_BOUNDS.south &&
-    south <= LOCAL_FLIGHT_BOUNDS.north
-  );
-}
-
-function CesiumRadiansToDegrees(value: number) {
-  return (value * 180) / Math.PI;
-}
-
-function boxTouchesFlightArea(box: unknown) {
-  if (!Array.isArray(box) || box.length < 12) {
-    return true;
-  }
-
-  const values = box.slice(0, 12).map(Number);
-
-  if (!values.every(Number.isFinite)) {
-    return true;
-  }
-
-  const [x, y, z] = values;
-  const centerDistance = Math.hypot(x, y, z);
-  const halfDiagonal = Math.hypot(...values.slice(3));
-
-  if (centerDistance === 0 || halfDiagonal >= centerDistance) {
-    return true;
-  }
-
-  const centerLongitude = CesiumRadiansToDegrees(Math.atan2(y, x));
-  const centerLatitude = CesiumRadiansToDegrees(
-    Math.atan2(z, Math.hypot(x, y)),
-  );
-  const angularRadius = CesiumRadiansToDegrees(
-    Math.asin(Math.min(halfDiagonal / centerDistance, 1)),
-  );
-
-  return (
-    centerLongitude + angularRadius >= LOCAL_FLIGHT_BOUNDS.west &&
-    centerLongitude - angularRadius <= LOCAL_FLIGHT_BOUNDS.east &&
-    centerLatitude + angularRadius >= LOCAL_FLIGHT_BOUNDS.south &&
-    centerLatitude - angularRadius <= LOCAL_FLIGHT_BOUNDS.north
-  );
-}
-
-function tileTouchesFlightArea(tile: Record<string, unknown>) {
-  const boundingVolume = tile.boundingVolume as
-    | { box?: unknown; region?: unknown }
-    | undefined;
-
-  if (boundingVolume?.region) {
-    return regionTouchesFlightArea(boundingVolume.region);
-  }
-
-  if (boundingVolume?.box) {
-    return boxTouchesFlightArea(boundingVolume.box);
-  }
-
-  return true;
-}
-
 function rewriteUri(uri: string) {
   if (uri.startsWith("/api/google-3d")) {
     return uri;
   }
 
   if (uri.startsWith("http")) {
+    try {
+      const absoluteUrl = new URL(uri);
+
+      if (
+        absoluteUrl.hostname === "tile.googleapis.com" &&
+        absoluteUrl.pathname.startsWith("/v1/3dtiles/")
+      ) {
+        return `/api/google-3d${absoluteUrl.pathname.replace(
+          /^\/v1\/3dtiles/,
+          "",
+        )}${absoluteUrl.search}`;
+      }
+    } catch {
+      return uri;
+    }
+
     return uri;
   }
 
@@ -139,17 +120,7 @@ function rewriteUri(uri: string) {
 
 function rewriteTilesetUris(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value
-      .filter((child) => {
-        if (!child || typeof child !== "object") {
-          return true;
-        }
-
-        const record = child as Record<string, unknown>;
-
-        return !("boundingVolume" in record) || tileTouchesFlightArea(record);
-      })
-      .map(rewriteTilesetUris);
+    return value.map(rewriteTilesetUris);
   }
 
   if (!value || typeof value !== "object") {
@@ -179,92 +150,128 @@ export async function GET(
   const incomingUrl = new URL(request.url);
   const googleUrl = new URL(`${GOOGLE_3D_BASE_URL}/${path}`);
   const cacheSearchParams = new URLSearchParams();
+  const sessionCacheSearchParams = new URLSearchParams();
+  // Local-only versioning lets us deliberately refresh the three-hour root
+  // session after a Google quota/configuration change. Never send it upstream.
+  const rootCacheVersion = incomingUrl.searchParams.get("appSession") ?? "default";
 
   incomingUrl.searchParams.forEach((value, name) => {
-    if (name !== "key") {
+    if (name !== "key" && name !== "appSession") {
       googleUrl.searchParams.set(name, value);
-      cacheSearchParams.set(name, value);
+      sessionCacheSearchParams.set(name, value);
+
+      if (name !== "session") {
+        cacheSearchParams.set(name, value);
+      }
     }
   });
+  cacheSearchParams.sort();
+  sessionCacheSearchParams.sort();
 
-  const cacheKey = `google-3d:${path}?${cacheSearchParams.toString()}`;
+  const requestKind = path === "root.json" ? "root" : "render";
+  const visitor = getGoogleVisitor(request);
+  const cacheKey =
+    requestKind === "root"
+      ? `google-3d:root-session:visitor=${visitor.id}:version=${rootCacheVersion}`
+      : `google-3d:${path}?${cacheSearchParams.toString()}`;
+  const fallbackCacheKeys =
+    requestKind === "render"
+      ? [`google-3d:${path}?${sessionCacheSearchParams.toString()}:accept=${
+          request.headers.get("accept") ?? "*/*"
+        }`]
+      : [];
 
   try {
-    const asset = await getCachedGoogleAsset(cacheKey, async () => {
-      const key = process.env.GOOGLE_MAP_TILES_API_KEY;
+    const asset = await getCachedGoogleAsset(
+      cacheKey,
+      async () => {
+        const key = process.env.GOOGLE_MAP_TILES_API_KEY;
 
-      if (!key) {
-        throw new Error("GOOGLE_MAP_TILES_API_KEY is not configured");
-      }
-
-      if (Date.now() < dailyQuotaBlockedUntil) {
-        throw new Error("Google 3D daily quota cooldown is active");
-      }
-
-      googleUrl.searchParams.set("key", key);
-
-      let response: Response | undefined;
-
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        if (Date.now() < dailyQuotaBlockedUntil) {
-          throw new Error("Google 3D daily quota cooldown is active");
+        if (!key) {
+          throw new Error("GOOGLE_MAP_TILES_API_KEY is not configured");
         }
 
-        await waitForGoogleRequestSlot();
-        response = await fetch(googleUrl, {
-          cache: "no-store",
-          headers: {
-            Accept: request.headers.get("accept") ?? "*/*",
-          },
-        });
+        googleUrl.searchParams.set("key", key);
 
-        if (response.status !== 429 || attempt === 3) {
-          break;
+        let response: Response | undefined;
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await waitForGoogleRateLimitCooldown();
+          response = await withGoogleRequestSlot(async () => {
+            // Recheck after waiting for a slot because another request may have
+            // received a 429 while this request was queued.
+            await waitForGoogleRateLimitCooldown();
+            await consumeGoogleRequestQuota(requestKind, visitor.id);
+
+            return fetch(googleUrl, {
+              cache: "no-store",
+              headers: {
+                Accept: request.headers.get("accept") ?? "*/*",
+              },
+            });
+          });
+
+          if (response.status !== 429) {
+            break;
+          }
+
+          const errorDetails = (await response.text()).slice(0, 800);
+          const retryAt = googleRetryBoundary(response, errorDetails);
+          googleDailyLimitReached =
+            /requests per day|dailyLimitExceeded|daily quota/i.test(
+              errorDetails,
+            );
+          googleRateLimitBlockedUntil = retryAt.getTime();
+
+          if (googleDailyLimitReached || attempt === 1) {
+            throw new GoogleUpstreamRateLimitError(retryAt);
+          }
         }
 
-        const quotaDetails = await response.clone().text();
-
-        if (quotaDetails.includes("requests per day")) {
-          dailyQuotaBlockedUntil = Date.now() + DAILY_QUOTA_COOLDOWN_MS;
-          break;
+        if (!response) {
+          throw new Error("Google 3D tile request did not return a response");
         }
 
-        const retryAfterSeconds = Number(response.headers.get("retry-after"));
-        const retryDelayMs = Number.isFinite(retryAfterSeconds)
-          ? Math.max(retryAfterSeconds * 1_000, 750)
-          : 750 * 2 ** attempt;
+        if (!response.ok) {
+          const errorDetails = (await response.text()).slice(0, 800);
+          throw new Error(
+            `Google 3D tile request failed: ${response.status} ${errorDetails}`,
+          );
+        }
 
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      }
+        const contentType = response.headers.get("content-type") ?? "";
+        const cacheSeconds =
+          requestKind === "root"
+            ? GOOGLE_3D_ROOT_CACHE_SECONDS
+            : GOOGLE_3D_RENDER_CACHE_SECONDS;
+        // Approved student-project exception: root sessions remain scoped to
+        // three hours, while exact render assets can be reused for 30 days.
+        // The render cache key intentionally excludes Google's session token.
+        const cachePolicy = {
+          cacheControl: `private, max-age=${cacheSeconds}, immutable`,
+          expiresAt: Date.now() + cacheSeconds * 1_000,
+        };
 
-      if (!response) {
-        throw new Error("Google 3D tile request did not return a response");
-      }
+        if (contentType.includes("json")) {
+          const tileset = await response.json();
+          const body = Buffer.from(JSON.stringify(rewriteTilesetUris(tileset)));
 
-      if (!response.ok) {
-        const errorDetails = (await response.text()).slice(0, 800);
-        throw new Error(
-          `Google 3D tile request failed: ${response.status} ${errorDetails}`,
-        );
-      }
-
-      const contentType = response.headers.get("content-type") ?? "";
-
-      if (contentType.includes("json")) {
-        const tileset = await response.json();
-        const body = Buffer.from(JSON.stringify(rewriteTilesetUris(tileset)));
+          return {
+            body,
+            ...cachePolicy,
+            contentType: "application/json",
+          };
+        }
 
         return {
-          body,
-          contentType: "application/json",
+          body: Buffer.from(await response.arrayBuffer()),
+          ...cachePolicy,
+          contentType: contentType || "application/octet-stream",
         };
-      }
-
-      return {
-        body: Buffer.from(await response.arrayBuffer()),
-        contentType: contentType || "application/octet-stream",
-      };
-    });
+      },
+      true,
+      fallbackCacheKeys,
+    );
 
     const responseBody = asset.contentType.includes("json")
       ? Buffer.from(
@@ -274,23 +281,55 @@ export async function GET(
         )
       : asset.body;
 
+    const headers = addGoogleVisitorCookie(new Headers({
+      "Cache-Control": asset.cacheControl ?? "no-store",
+      "Content-Type": asset.contentType,
+      "X-Google-Api-Cache": asset.cacheStatus,
+    }), request, visitor);
+
     return new Response(new Uint8Array(responseBody), {
       status: 200,
-      headers: {
-        "Cache-Control": "public, max-age=10800",
-        "Content-Type": asset.contentType,
-        "X-Google-Api-Cache": asset.cacheStatus,
-      },
+      headers,
     });
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message === "Google 3D daily quota cooldown is active"
-    ) {
-      return new Response(null, {
-        status: 429,
-        headers: { "Retry-After": "60" },
-      });
+    if (error instanceof GoogleUpstreamRateLimitError) {
+      const headers = quotaResponseHeaders(error);
+      headers.set("X-Iowa-Google-Rate-Limited", "true");
+
+      return new Response(
+        JSON.stringify({
+          error: "RATE_LIMIT_REACHED",
+          resetsAt: error.resetsAt.toISOString(),
+          scope: error.scope,
+        }),
+        {
+          status: 429,
+          headers: addGoogleVisitorCookie(headers, request, visitor),
+        },
+      );
+    }
+
+    if (error instanceof GoogleQuotaLimitError) {
+      const quotaError =
+        error.scope === "visitor-daily"
+          ? "VISITOR_DAILY_LIMIT_REACHED"
+          : "MONTHLY_LIMIT_REACHED";
+
+      return new Response(
+        JSON.stringify({
+          error: quotaError,
+          resetsAt: error.resetsAt.toISOString(),
+          scope: error.scope,
+        }),
+        {
+          status: 403,
+          headers: addGoogleVisitorCookie(
+            quotaResponseHeaders(error),
+            request,
+            visitor,
+          ),
+        },
+      );
     }
 
     console.error("Google 3D tile proxy failed", error);
