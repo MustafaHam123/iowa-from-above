@@ -8,6 +8,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 export type GoogleRequestKind = "root" | "render";
@@ -45,7 +46,9 @@ const ENFORCE_VISITOR_DAILY_ROOT_LIMIT = false;
 const ENFORCE_VISITOR_DAILY_RENDER_LIMIT = false;
 const quotaFile =
   process.env.GOOGLE_API_QUOTA_FILE ??
-  path.join(process.cwd(), ".data", "google-api-quota.json");
+  (process.env.VERCEL
+    ? path.join(tmpdir(), "iowa-from-above", "google-api-quota.json")
+    : path.join(process.cwd(), ".data", "google-api-quota.json"));
 const dateFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: IOWA_TIME_ZONE,
   year: "numeric",

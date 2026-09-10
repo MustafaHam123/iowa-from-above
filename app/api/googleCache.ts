@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 type CachedGoogleAsset = {
@@ -11,7 +12,9 @@ type CachedGoogleAsset = {
 
 const cacheDir =
   process.env.GOOGLE_API_CACHE_DIR ??
-  path.join(process.cwd(), ".data", "google-api-cache");
+  (process.env.VERCEL
+    ? path.join(tmpdir(), "iowa-from-above", "google-api-cache")
+    : path.join(process.cwd(), ".data", "google-api-cache"));
 const pendingAssets = new Map<string, Promise<CachedGoogleAsset>>();
 const memoryAssets = new Map<string, CachedGoogleAsset>();
 const MEMORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
