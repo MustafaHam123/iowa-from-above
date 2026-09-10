@@ -24,6 +24,10 @@ import {
   getStoredAudioMuted,
   setStoredAudioMuted,
 } from "./audioPreferences";
+import {
+  clampToRadius,
+  FLIGHT_BOUNDARY_RADIUS_METERS,
+} from "./flightBoundaries";
 
 type GoogleApiUsage = {
   month: string;
@@ -98,6 +102,9 @@ const MAP_MAXIMUM_REQUESTS = 24;
 const MAP_MAXIMUM_REQUESTS_PER_SERVER = 12;
 const API_USAGE_REFRESH_INTERVAL_MS = 30_000;
 const CINEMATIC_SKIP_HOLD_MS = 1_500;
+const MAX_ADDRESS_DESTINATIONS = 3;
+const ADDRESS_DESTINATIONS_STORAGE_KEY =
+  "iowa-from-above-address-destinations";
 const MODEL_AXIS_FIX = new Cesium.HeadingPitchRoll(
   Cesium.Math.toRadians(-90),
   0,
@@ -406,7 +413,7 @@ export default function IowaTileMap() {
   const activateBoostRef = useRef<(() => void) | null>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
   const teleportDroneRef = useRef<
-    ((destination: { lat: number; lng: number }) => void) | null
+    ((destination: { lat: number; lng: number }) => boolean) | null
   >(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const gradeStageRef = useRef<Cesium.PostProcessStage | undefined>(undefined);
@@ -416,6 +423,7 @@ export default function IowaTileMap() {
   const [address, setAddress] = useState("");
   const [addressMessage, setAddressMessage] = useState("");
   const [isFindingAddress, setIsFindingAddress] = useState(false);
+  const [addressDestinationKeys, setAddressDestinationKeys] = useState<string[]>([]);
   const [isQuotaReached, setIsQuotaReached] = useState(false);
   const [journeyStatus, setJourneyStatus] = useState(INITIAL_JOURNEY);
   const [boostStatus, setBoostStatus] = useState({ charges: 0, active: false });
@@ -426,10 +434,32 @@ export default function IowaTileMap() {
   const [isApiStatsOpen, setIsApiStatsOpen] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const currentExhibit = EXHIBITS[journeyStatus.index];
+  const addressDestinationsRemaining = Math.max(
+    0,
+    MAX_ADDRESS_DESTINATIONS - addressDestinationKeys.length,
+  );
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(
-      () => setIsAudioMuted(getStoredAudioMuted()),
+      () => {
+        setIsAudioMuted(getStoredAudioMuted());
+        try {
+          const storedDestinations = JSON.parse(
+            window.sessionStorage.getItem(
+              ADDRESS_DESTINATIONS_STORAGE_KEY,
+            ) ?? "[]",
+          );
+          if (Array.isArray(storedDestinations)) {
+            setAddressDestinationKeys(
+              storedDestinations
+                .filter((value): value is string => typeof value === "string")
+                .slice(0, MAX_ADDRESS_DESTINATIONS),
+            );
+          }
+        } catch {
+          window.sessionStorage.removeItem(ADDRESS_DESTINATIONS_STORAGE_KEY);
+        }
+      },
       0,
     );
     return () => window.clearTimeout(restoreTimer);
@@ -570,9 +600,41 @@ export default function IowaTileMap() {
         throw new Error(result.error ?? "Iowa address not found.");
       }
 
-      teleportDroneRef.current?.({ lat: result.lat, lng: result.lng });
+      const destinationKey = `${result.lat.toFixed(5)},${result.lng.toFixed(5)}`;
+      const isNewDestination = !addressDestinationKeys.includes(destinationKey);
+
+      if (
+        isNewDestination &&
+        addressDestinationKeys.length >= MAX_ADDRESS_DESTINATIONS
+      ) {
+        throw new Error("Three-address limit reached. Choose a previous location.");
+      }
+
+      const didTeleport = teleportDroneRef.current?.({
+        lat: result.lat,
+        lng: result.lng,
+      });
+
+      if (!didTeleport) {
+        throw new Error("Finish the current stop before traveling by address.");
+      }
+
+      const nextDestinationKeys = isNewDestination
+        ? [...addressDestinationKeys, destinationKey]
+        : addressDestinationKeys;
+      if (isNewDestination) {
+        setAddressDestinationKeys(nextDestinationKeys);
+        window.sessionStorage.setItem(
+          ADDRESS_DESTINATIONS_STORAGE_KEY,
+          JSON.stringify(nextDestinationKeys),
+        );
+      }
       setAddress(result.address ?? address);
-      setAddressMessage("Teleported");
+      setAddressMessage(
+        nextDestinationKeys.length === MAX_ADDRESS_DESTINATIONS
+          ? "Teleported · 3-address limit reached"
+          : `Teleported · ${MAX_ADDRESS_DESTINATIONS - nextDestinationKeys.length} left`,
+      );
     } catch (error) {
       setAddressMessage(
         error instanceof Error ? error.message : "Iowa address not found.",
@@ -1096,7 +1158,7 @@ export default function IowaTileMap() {
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     teleportDroneRef.current = (destination) => {
-      if (journey.locked) return;
+      if (journey.locked) return false;
       const iowaDestination = clampToBounds(destination, IOWA_BOUNDS);
       flightBounds = IOWA_BOUNDS;
       drone.lat = iowaDestination.lat;
@@ -1115,6 +1177,7 @@ export default function IowaTileMap() {
       activeKeys.clear();
       markFlightActive();
       setCameraOnDrone();
+      return true;
     };
 
     function spawnSpeedParticle(speedEffectAmount: number) {
@@ -1343,13 +1406,30 @@ export default function IowaTileMap() {
 
       const distance = forwardVelocityMetersPerSecond * deltaSeconds;
       if (Math.abs(distance) > 0.001) {
+        const candidate = clampToBounds(
+          moveMeters(drone, drone.heading, distance),
+          flightBounds,
+        );
+        const boundaryCenter = journey.flightBoundaryCenter;
+        const constrainedCandidate = boundaryCenter
+          ? clampToRadius(
+              candidate,
+              boundaryCenter,
+              FLIGHT_BOUNDARY_RADIUS_METERS,
+            )
+          : candidate;
+        const hitBoundary =
+          constrainedCandidate.lat !== candidate.lat ||
+          constrainedCandidate.lng !== candidate.lng;
+
         Object.assign(
           drone,
-          clampToBounds(
-            moveMeters(drone, drone.heading, distance),
-            flightBounds,
-          ),
+          constrainedCandidate,
         );
+
+        if (hitBoundary) {
+          forwardVelocityMetersPerSecond = 0;
+        }
       }
 
       if (drone.height < minimumDroneHeightMeters) {
@@ -1747,17 +1827,29 @@ export default function IowaTileMap() {
         <button
           type="button"
           aria-label={
-            isAddressOpen ? "Close address search" : "Find an Iowa address"
+            isAddressOpen
+              ? "Close address search"
+              : `Find an Iowa address. ${addressDestinationsRemaining} new locations remaining`
           }
-          title={isAddressOpen ? "Close" : "Find an Iowa address"}
-          className="grid size-9 shrink-0 place-items-center text-base text-white/90 transition-colors hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white"
+          title={isAddressOpen ? "Close" : `${addressDestinationsRemaining} new address locations remaining`}
+          className="relative grid size-9 shrink-0 place-items-center text-base text-white/90 transition-colors hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white"
           onClick={() => {
             setIsAddressOpen((open) => !open);
-            setAddressMessage("");
+            setAddressMessage(
+              addressDestinationsRemaining === 0
+                ? "3 locations used · previous locations still work"
+                : "",
+            );
           }}
         >
           <span aria-hidden="true">
             {isAddressOpen ? <>&#215;</> : <>&#8982;</>}
+          </span>
+          <span
+            className="absolute right-0.5 top-0.5 grid min-w-3.5 place-items-center rounded-full bg-white px-0.5 text-[9px] font-bold leading-3.5 text-slate-950"
+            aria-hidden="true"
+          >
+            {addressDestinationsRemaining}
           </span>
         </button>
         <form
@@ -1779,8 +1871,15 @@ export default function IowaTileMap() {
           <button
             type="submit"
             aria-label="Teleport to address"
-            title="Teleport"
-            disabled={isFindingAddress || !address.trim()}
+            title={
+              addressDestinationsRemaining === 0
+                ? "Travel to a previous address"
+                : "Teleport"
+            }
+            disabled={
+              isFindingAddress ||
+              !address.trim()
+            }
             className="grid size-7 shrink-0 place-items-center rounded-full border border-white/20 bg-white/5 text-white/85 transition-colors hover:border-white/40 hover:bg-white/12 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-35"
           >
             <svg

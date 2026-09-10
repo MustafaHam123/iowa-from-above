@@ -540,6 +540,11 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
   return {
     get locked() { return ["cinematic", "question", "transfer"].includes(status.phase); },
     get isResting() { return status.phase === "question"; },
+    get flightBoundaryCenter() {
+      return status.phase === "complete"
+        ? null
+        : { lat: target.lat, lng: target.lng };
+    },
     tick(delta: number) {
       if (document.hidden) return;
       elapsed += delta; phaseTime += delta;
