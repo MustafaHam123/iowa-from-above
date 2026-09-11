@@ -119,6 +119,31 @@ function approach(current: number, target: number, maximumStep: number) {
   return current + clamp(target - current, -maximumStep, maximumStep);
 }
 
+type MobileControlDirection = "up" | "right" | "down" | "left";
+
+function MobileControlIcon({ direction }: { direction: MobileControlDirection }) {
+  const rotation = {
+    up: 0,
+    right: 90,
+    down: 180,
+    left: 270,
+  }[direction];
+
+  return (
+    <svg
+      aria-hidden="true"
+      className="mobile-flight-controls__icon"
+      viewBox="0 0 24 24"
+    >
+      <path
+        d="M12 5 5 17h14L12 5Z"
+        fill="currentColor"
+        transform={`rotate(${rotation} 12 12)`}
+      />
+    </svg>
+  );
+}
+
 type FlightAudio = {
   context: AudioContext;
   windSource: AudioBufferSourceNode;
@@ -2123,8 +2148,8 @@ export default function IowaTileMap() {
       <section className="mobile-flight-controls" aria-label="Touch flight controls">
         <div className="mobile-altitude-controls">
           {[
-            { key: "e", label: "Rise", icon: "↑" },
-            { key: "q", label: "Descend", icon: "↓" },
+            { key: "e", label: "Rise", direction: "up" as const },
+            { key: "q", label: "Descend", direction: "down" as const },
           ].map((control) => (
             <button
               key={control.key}
@@ -2138,16 +2163,16 @@ export default function IowaTileMap() {
               }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <span aria-hidden="true">{control.icon}</span>
+              <MobileControlIcon direction={control.direction} />
             </button>
           ))}
         </div>
         <div className="mobile-direction-pad">
           {[
-            { key: "w", label: "Fly forward", icon: "▲", className: "mobile-direction-pad__forward" },
-            { key: "a", label: "Turn left", icon: "◀", className: "mobile-direction-pad__left" },
-            { key: "d", label: "Turn right", icon: "▶", className: "mobile-direction-pad__right" },
-            { key: "s", label: "Fly backward", icon: "▼", className: "mobile-direction-pad__back" },
+            { key: "w", label: "Fly forward", direction: "up" as const, className: "mobile-direction-pad__forward" },
+            { key: "a", label: "Turn left", direction: "left" as const, className: "mobile-direction-pad__left" },
+            { key: "d", label: "Turn right", direction: "right" as const, className: "mobile-direction-pad__right" },
+            { key: "s", label: "Fly backward", direction: "down" as const, className: "mobile-direction-pad__back" },
           ].map((control) => (
             <button
               key={control.key}
@@ -2162,7 +2187,7 @@ export default function IowaTileMap() {
               }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <span aria-hidden="true">{control.icon}</span>
+              <MobileControlIcon direction={control.direction} />
             </button>
           ))}
         </div>

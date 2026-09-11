@@ -22,6 +22,20 @@ export async function generateMetadata({ params }: ExhibitPageProps): Promise<Me
   return {
     title: `${exhibit.name} | Iowa From Above`,
     description: exhibit.summary,
+    alternates: { canonical: `/exhibits/${exhibit.id}` },
+    openGraph: {
+      title: `${exhibit.name} | Iowa From Above`,
+      description: exhibit.summary,
+      type: "article",
+      url: `/exhibits/${exhibit.id}`,
+      images: [{ url: exhibit.image.url, alt: exhibit.image.alt }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${exhibit.name} | Iowa From Above`,
+      description: exhibit.summary,
+      images: [exhibit.image.url],
+    },
   };
 }
 

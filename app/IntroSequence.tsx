@@ -209,7 +209,7 @@ export default function IntroSequence() {
         ) : null}
         <Image
           src="/intro/congressional-app-challenge-2026.png"
-          alt={step.type === "image" ? step.content : ""}
+          alt="Congressional App Challenge 2026 logo"
           width={800}
           height={450}
           preload
