@@ -21,7 +21,9 @@ import {
 } from "./journeyProgress";
 import {
   AUDIO_MUTED_EVENT,
+  getCurrentGuideSubtitle,
   getStoredAudioMuted,
+  GUIDE_SUBTITLE_EVENT,
   setStoredAudioMuted,
 } from "./audioPreferences";
 import {
@@ -458,11 +460,23 @@ export default function IowaTileMap() {
     useState<GoogleApiUsage | null>(null);
   const [isApiStatsOpen, setIsApiStatsOpen] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [mobileSubtitle, setMobileSubtitle] = useState(getCurrentGuideSubtitle);
   const currentExhibit = EXHIBITS[journeyStatus.index];
   const addressDestinationsRemaining = Math.max(
     0,
     MAX_ADDRESS_DESTINATIONS - addressDestinationKeys.length,
   );
+
+  useEffect(() => {
+    function updateMobileSubtitle(event: Event) {
+      const subtitle = (event as CustomEvent<string>).detail;
+      if (subtitle) setMobileSubtitle(subtitle);
+    }
+
+    window.addEventListener(GUIDE_SUBTITLE_EVENT, updateMobileSubtitle);
+    return () =>
+      window.removeEventListener(GUIDE_SUBTITLE_EVENT, updateMobileSubtitle);
+  }, []);
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(
@@ -2130,7 +2144,7 @@ export default function IowaTileMap() {
         </div>
 
         <div className="flight-instrument flight-instrument--altitude">
-          <span className="flight-instrument__reading">
+          <span className="flight-instrument__reading flight-instrument__altitude-reading">
             <output ref={altitudeReadoutRef}>1,000</output>
             <small>ft</small>
           </span>
@@ -2143,6 +2157,9 @@ export default function IowaTileMap() {
               <i key={index} />
             ))}
           </div>
+          <p className="mobile-narration-subtitle" aria-live="polite">
+            {mobileSubtitle}
+          </p>
         </div>
       </section>
       <section className="mobile-flight-controls" aria-label="Touch flight controls">

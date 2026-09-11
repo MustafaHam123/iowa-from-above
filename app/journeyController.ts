@@ -104,11 +104,13 @@ export function createJourneyController(options: Options) {
   let guidanceAudio: HTMLAudioElement | undefined;
   let isDestroyed = false;
   let audioMuted = getStoredAudioMuted();
+  const phoneAudioRetries = new Map<HTMLAudioElement, EventListener>();
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const routePositions = [world(drone), world(drone)];
-  const routeWidth = window.matchMedia(
+  const isPhoneLayout = window.matchMedia(
     "(max-width: 950px) and (max-height: 600px) and (orientation: landscape)",
-  ).matches ? 4 : 7;
+  ).matches;
+  const routePositions = [world(drone), world(drone)];
+  const routeWidth = isPhoneLayout ? 4 : 7;
   const route = add({ show: false, polyline: {
     positions: new C.CallbackProperty(() => routePositions, false),
     width: routeWidth,
@@ -131,6 +133,32 @@ export function createJourneyController(options: Options) {
     isCurrent: () => boolean,
     onFailure: () => void,
   ) {
+    function clearPhoneRetry() {
+      const retry = phoneAudioRetries.get(clip);
+      if (!retry) return;
+      window.removeEventListener("pointerdown", retry, true);
+      phoneAudioRetries.delete(clip);
+    }
+
+    function handleFailure() {
+      if (!isPhoneLayout || isDestroyed || !isCurrent()) {
+        clearPhoneRetry();
+        onFailure();
+        return;
+      }
+
+      if (phoneAudioRetries.has(clip)) return;
+      const retry: EventListener = () => {
+        clearPhoneRetry();
+        playOwnedAudio(clip, isCurrent, onFailure);
+      };
+      phoneAudioRetries.set(clip, retry);
+      window.addEventListener("pointerdown", retry, {
+        capture: true,
+        once: true,
+      });
+    }
+
     try {
       const playback = clip.play() as unknown;
       if (
@@ -138,18 +166,19 @@ export function createJourneyController(options: Options) {
         typeof (playback as { then?: unknown }).then === "function"
       ) {
         void Promise.resolve(playback).then(() => {
+          clearPhoneRetry();
           if (isDestroyed || !isCurrent()) clip.pause();
-        }).catch(onFailure);
+        }).catch(handleFailure);
       } else if (
         playback &&
         typeof (playback as { catch?: unknown }).catch === "function"
       ) {
         (playback as { catch: (handler: () => void) => unknown }).catch(
-          onFailure,
+          handleFailure,
         );
       }
     } catch {
-      onFailure();
+      handleFailure();
     }
   }
 const portalBody = add({ show: false, position: world(drone), billboard: {
@@ -653,6 +682,10 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
     },
     destroy() {
       isDestroyed = true;
+      for (const retry of phoneAudioRetries.values()) {
+        window.removeEventListener("pointerdown", retry, true);
+      }
+      phoneAudioRetries.clear();
       for (const clip of tourAudio) clip.pause();
       audio?.pause();
       guidanceAudio?.pause();
