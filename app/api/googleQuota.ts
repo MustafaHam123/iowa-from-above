@@ -25,6 +25,7 @@ export type GoogleVisitor = {
 };
 
 type QuotaLedger = {
+  version: 2;
   day: string;
   month: string;
   monthCounts: RequestCounts;
@@ -38,6 +39,13 @@ const VISITOR_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 const LIMITS = {
   monthly: { root: 1_000, render: 100_000 },
   visitorDaily: { root: 5, render: 2_000 },
+} as const;
+// Starting totals supplied for September. The proxy adds requests made after
+// this baseline and automatically drops it when the Iowa calendar month rolls
+// over.
+const USAGE_BASELINE = {
+  month: "2026-09",
+  counts: { root: 500, render: 60_000 },
 } as const;
 // WARNING: TESTING ONLY. Set both flags back to true before release so each
 // visitor is limited per America/Chicago calendar day to 5 Google root
@@ -138,12 +146,19 @@ function emptyLedger(now = new Date()): QuotaLedger {
   const keys = chicagoDateKey(now);
 
   return {
+    version: 2,
     day: keys.day,
     month: keys.month,
     monthCounts: { root: 0, render: 0 },
     visitorDailyRootCounts: {},
     visitorDailyRenderCounts: {},
   };
+}
+
+function usageBaseline(month: string): RequestCounts {
+  return month === USAGE_BASELINE.month
+    ? { ...USAGE_BASELINE.counts }
+    : { root: 0, render: 0 };
 }
 
 function normalizeLedger(value: unknown, now = new Date()): QuotaLedger {
@@ -179,13 +194,15 @@ function normalizeLedger(value: unknown, now = new Date()): QuotaLedger {
     }
   }
 
+  const isCurrentLedger = candidate.version === 2;
   const ledger: QuotaLedger = {
+    version: 2,
     day: typeof candidate.day === "string" ? candidate.day : fallback.day,
     month:
       typeof candidate.month === "string" ? candidate.month : fallback.month,
     monthCounts: {
-      root: Number(candidate.monthCounts?.root) || 0,
-      render: Number(candidate.monthCounts?.render) || 0,
+      root: isCurrentLedger ? Number(candidate.monthCounts?.root) || 0 : 0,
+      render: isCurrentLedger ? Number(candidate.monthCounts?.render) || 0 : 0,
     },
     visitorDailyRootCounts,
     visitorDailyRenderCounts,
@@ -218,10 +235,14 @@ async function readLedger() {
 
 export async function getGoogleQuotaSnapshot() {
   const ledger = await readLedger();
+  const baseline = usageBaseline(ledger.month);
 
   return {
     month: ledger.month,
-    counts: ledger.monthCounts,
+    counts: {
+      root: baseline.root + ledger.monthCounts.root,
+      render: baseline.render + ledger.monthCounts.render,
+    },
     limits: LIMITS.monthly,
   };
 }
@@ -297,8 +318,12 @@ export async function consumeGoogleRequestQuota(
   return withQuotaGate(async () => {
     const now = new Date();
     const ledger = normalizeLedger(await readLedger(), now);
+    const baseline = usageBaseline(ledger.month);
 
-    if (ledger.monthCounts[kind] >= LIMITS.monthly[kind]) {
+    if (
+      baseline[kind] + ledger.monthCounts[kind] >=
+      LIMITS.monthly[kind]
+    ) {
       throw new GoogleQuotaLimitError(
         "monthly",
         nextPeriodBoundary("month", now),
