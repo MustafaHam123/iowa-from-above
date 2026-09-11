@@ -5,6 +5,7 @@ import { INITIAL_JOURNEY, type JourneyStatus } from "./journeyStops";
 import { loadJourneyCheckpoint } from "./journeyProgress";
 import {
   AUDIO_MUTED_EVENT,
+  announceGuideSubtitle,
   getStoredAudioMuted,
   GUIDE_AUDIO_EVENT,
 } from "./audioPreferences";
@@ -48,6 +49,18 @@ const MOUTH_FRAME_POSITION = [
   "100% 100%",
 ] as const;
 
+function configureNarration(
+  narration: HTMLAudioElement,
+  src: string,
+  isPhoneLayout: boolean,
+) {
+  narration.preload = isPhoneLayout ? "auto" : "none";
+  narration.src = src;
+  narration.muted = getStoredAudioMuted();
+  narration.setAttribute("playsinline", "");
+  narration.load();
+}
+
 export default function TutorialGuide() {
   const [stepIndex, setStepIndex] = useState(0);
   const [isControlHolding, setIsControlHolding] = useState(false);
@@ -58,6 +71,16 @@ export default function TutorialGuide() {
   const narrationStepRef = useRef(-1);
   const isComplete = stepIndex >= TUTORIAL_STEPS.length;
   const step = TUTORIAL_STEPS[Math.min(stepIndex, TUTORIAL_STEPS.length - 1)];
+
+  useEffect(() => {
+    announceGuideSubtitle(
+      !isComplete
+        ? step.message
+        : journey.phase === "cinematic" && journey.caption
+          ? journey.caption
+          : journey.message,
+    );
+  }, [isComplete, journey.caption, journey.message, journey.phase, step.message]);
 
   useEffect(() => {
     if (!loadJourneyCheckpoint()) {
@@ -112,21 +135,26 @@ export default function TutorialGuide() {
     }
 
     function updateMouth(time: number) {
-      if (!activeAudio || activeAudio.paused || !analyser || !samples) return;
+      if (!activeAudio || activeAudio.paused) return;
 
       if (time - lastMouthUpdate >= 70) {
-        analyser.getByteTimeDomainData(samples);
-        let sumSquares = 0;
+        let nextFrame = 1 + (Math.floor(time / 85) % 5);
 
-        for (const sample of samples) {
-          const normalized = (sample - 128) / 128;
-          sumSquares += normalized * normalized;
+        if (analyser && samples) {
+          analyser.getByteTimeDomainData(samples);
+          let sumSquares = 0;
+
+          for (const sample of samples) {
+            const normalized = (sample - 128) / 128;
+            sumSquares += normalized * normalized;
+          }
+
+          const volume = Math.sqrt(sumSquares / samples.length);
+          nextFrame =
+            volume < 0.018
+              ? 0
+              : 1 + ((Math.floor(time / 85) + Math.round(volume * 30)) % 5);
         }
-
-        const volume = Math.sqrt(sumSquares / samples.length);
-        const speechFrame =
-          1 + ((Math.floor(time / 85) + Math.round(volume * 30)) % 5);
-        const nextFrame = volume < 0.018 ? 0 : speechFrame;
 
         setMouthFrame((current) =>
           current === nextFrame ? current : nextFrame,
@@ -163,14 +191,20 @@ export default function TutorialGuide() {
       detachAudio();
       stopMouth();
       activeAudio = nextAudio;
-      audioContext = new AudioContext();
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.55;
-      samples = new Uint8Array(analyser.fftSize);
-      source = audioContext.createMediaElementSource(activeAudio);
-      source.connect(analyser);
-      analyser.connect(audioContext.destination);
+      const isPhoneLayout = window.matchMedia(
+        "(max-width: 950px) and (max-height: 600px) and (orientation: landscape)",
+      ).matches;
+
+      if (!isPhoneLayout) {
+        audioContext = new AudioContext();
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.55;
+        samples = new Uint8Array(analyser.fftSize);
+        source = audioContext.createMediaElementSource(activeAudio);
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+      }
       activeAudio.addEventListener("play", startMouth);
       activeAudio.addEventListener("pause", pauseMouth);
       activeAudio.addEventListener("ended", pauseMouth);
@@ -182,6 +216,47 @@ export default function TutorialGuide() {
       window.removeEventListener(GUIDE_AUDIO_EVENT, followJourneyAudio);
       detachAudio();
       stopMouth();
+    };
+  }, []);
+
+  useEffect(() => {
+    const isPhoneLayout = window.matchMedia(
+      "(max-width: 950px) and (max-height: 600px) and (orientation: landscape)",
+    ).matches;
+    if (!isPhoneLayout || narrationRef.current) return;
+
+    const narration = document.createElement("audio");
+    narration.preload = "auto";
+    narration.src = TUTORIAL_STEPS[0].audioSrc;
+    narration.muted = getStoredAudioMuted();
+    narration.setAttribute("playsinline", "");
+    narration.load();
+    narrationRef.current = narration;
+    narrationStepRef.current = 0;
+
+    function primePhoneNarration() {
+      if (!narration.paused) return;
+
+      const wasMuted = narration.muted;
+      narration.muted = true;
+      void narration
+        .play()
+        .then(() => {
+          narration.pause();
+          narration.currentTime = 0;
+          narration.muted = wasMuted;
+        })
+        .catch(() => {
+          narration.muted = wasMuted;
+        });
+    }
+
+    window.addEventListener("pointerdown", primePhoneNarration, {
+      capture: true,
+      once: true,
+    });
+    return () => {
+      window.removeEventListener("pointerdown", primePhoneNarration, true);
     };
   }, []);
 
@@ -205,14 +280,18 @@ export default function TutorialGuide() {
       return;
     }
 
+    const isPhoneLayout = window.matchMedia(
+      "(max-width: 950px) and (max-height: 600px) and (orientation: landscape)",
+    ).matches;
+
     if (narrationStepRef.current !== stepIndex) {
       narrationRef.current?.pause();
 
-      const narration = document.createElement("audio");
-      narration.preload = "none";
-      narration.src = step.audioSrc;
-      narration.muted = getStoredAudioMuted();
-      narration.load();
+      const narration =
+        isPhoneLayout && narrationRef.current
+          ? narrationRef.current
+          : document.createElement("audio");
+      configureNarration(narration, step.audioSrc, isPhoneLayout);
       narrationRef.current = narration;
       narrationStepRef.current = stepIndex;
     }
@@ -221,34 +300,45 @@ export default function TutorialGuide() {
     let isCurrentStep = true;
     let animationFrame = 0;
     let lastMouthUpdate = 0;
-    const audioContext = new AudioContext();
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.55;
-    const source = narration
+    const audioContext = isPhoneLayout ? null : new AudioContext();
+    const analyser = audioContext?.createAnalyser() ?? null;
+    if (analyser) {
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.55;
+    }
+    const source = narration && audioContext
       ? audioContext.createMediaElementSource(narration)
       : null;
-    const samples = new Uint8Array(analyser.fftSize);
+    const samples: Uint8Array<ArrayBuffer> | null = analyser
+      ? new Uint8Array(analyser.fftSize)
+      : null;
 
-    source?.connect(analyser);
-    analyser.connect(audioContext.destination);
+    if (source && analyser && audioContext) {
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
+    }
 
     function updateMouth(time: number) {
       if (!isCurrentStep || narration?.paused) return;
 
       if (time - lastMouthUpdate >= 70) {
-        analyser.getByteTimeDomainData(samples);
-        let sumSquares = 0;
+        let nextFrame = 1 + (Math.floor(time / 85) % 5);
 
-        for (const sample of samples) {
-          const normalized = (sample - 128) / 128;
-          sumSquares += normalized * normalized;
+        if (analyser && samples) {
+          analyser.getByteTimeDomainData(samples);
+          let sumSquares = 0;
+
+          for (const sample of samples) {
+            const normalized = (sample - 128) / 128;
+            sumSquares += normalized * normalized;
+          }
+
+          const volume = Math.sqrt(sumSquares / samples.length);
+          nextFrame =
+            volume < 0.018
+              ? 0
+              : 1 + ((Math.floor(time / 85) + Math.round(volume * 30)) % 5);
         }
-
-        const volume = Math.sqrt(sumSquares / samples.length);
-        const speechFrame =
-          1 + ((Math.floor(time / 85) + Math.round(volume * 30)) % 5);
-        const nextFrame = volume < 0.018 ? 0 : speechFrame;
 
         setMouthFrame((current) =>
           current === nextFrame ? current : nextFrame,
@@ -269,34 +359,41 @@ export default function TutorialGuide() {
       setMouthFrame(0);
     }
 
-    function playNarration() {
+    function removePlaybackRetry() {
+      window.removeEventListener("pointerdown", playNarration, true);
+      window.removeEventListener("keydown", playNarration, true);
+    }
+
+    async function playNarration() {
       if (isCurrentStep && narration?.paused) {
-        void audioContext
-          .resume()
-          .then(() => narration.play())
-          .catch(() => undefined);
+        try {
+          await audioContext?.resume();
+          await narration.play();
+          removePlaybackRetry();
+        } catch {
+          // Mobile browsers retry on the next real touch gesture.
+        }
       }
     }
 
     narration?.addEventListener("play", handleNarrationPlay);
     narration?.addEventListener("pause", handleNarrationStop);
     narration?.addEventListener("ended", handleNarrationStop);
-    playNarration();
-    window.addEventListener("pointerdown", playNarration, { once: true });
-    window.addEventListener("keydown", playNarration, { once: true });
+    window.addEventListener("pointerdown", playNarration, true);
+    window.addEventListener("keydown", playNarration, true);
+    void playNarration();
 
     return () => {
       isCurrentStep = false;
-      window.removeEventListener("pointerdown", playNarration);
-      window.removeEventListener("keydown", playNarration);
+      removePlaybackRetry();
       narration?.pause();
       window.cancelAnimationFrame(animationFrame);
       narration?.removeEventListener("play", handleNarrationPlay);
       narration?.removeEventListener("pause", handleNarrationStop);
       narration?.removeEventListener("ended", handleNarrationStop);
       source?.disconnect();
-      analyser.disconnect();
-      void audioContext.close();
+      analyser?.disconnect();
+      void audioContext?.close();
       if (narration) narration.currentTime = 0;
     };
   }, [isComplete, isIntroComplete, step.audioSrc, stepIndex]);

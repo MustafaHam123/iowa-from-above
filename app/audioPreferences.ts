@@ -1,6 +1,8 @@
 export const AUDIO_MUTED_STORAGE_KEY = "iowa-from-above-audio-muted";
 export const AUDIO_MUTED_EVENT = "iowa-audio-muted";
 export const GUIDE_AUDIO_EVENT = "iowa-guide-audio";
+export const GUIDE_SUBTITLE_EVENT = "iowa-guide-subtitle";
+let currentGuideSubtitle = "Avery's narration will appear here.";
 
 export function getStoredAudioMuted() {
   if (typeof window === "undefined") return false;
@@ -22,4 +24,15 @@ export function setStoredAudioMuted(muted: boolean) {
 
 export function announceGuideAudio(audio: HTMLAudioElement) {
   window.dispatchEvent(new CustomEvent(GUIDE_AUDIO_EVENT, { detail: audio }));
+}
+
+export function announceGuideSubtitle(subtitle: string) {
+  currentGuideSubtitle = subtitle;
+  window.dispatchEvent(
+    new CustomEvent(GUIDE_SUBTITLE_EVENT, { detail: subtitle }),
+  );
+}
+
+export function getCurrentGuideSubtitle() {
+  return currentGuideSubtitle;
 }
