@@ -1976,8 +1976,12 @@ export default function IowaTileMap() {
           </a>
         </aside>
       )}
-      {journeyStatus.phase === "cinematic" && (
-        <LandmarkChat key={currentExhibit.id} exhibit={currentExhibit} />
+      {journeyStatus.phase !== "tutorial" && (
+        <LandmarkChat
+          key={currentExhibit.id}
+          exhibit={currentExhibit}
+          phase={journeyStatus.phase}
+        />
       )}
       <div className="journey-dock absolute bottom-7 right-3 z-20 flex flex-col items-end gap-3 sm:right-5">
         <div

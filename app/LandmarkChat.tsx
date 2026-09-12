@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import type { Exhibit } from "./exhibits";
+import type { JourneyPhase } from "./journeyStops";
 
 type ChatMessage = { role: "user" | "assistant"; text: string };
 
@@ -11,22 +12,58 @@ const SUGGESTED_QUESTIONS = [
   "Tell me one surprising fact.",
 ] as const;
 
-export default function LandmarkChat({ exhibit }: { exhibit: Exhibit }) {
+export default function LandmarkChat({
+  exhibit,
+  phase,
+}: {
+  exhibit: Exhibit;
+  phase: JourneyPhase;
+}) {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [isManuallyOpen, setIsManuallyOpen] = useState(false);
+  const [isCinematicDismissed, setIsCinematicDismissed] = useState(false);
+  const [showQuizLock, setShowQuizLock] = useState(false);
+  const isQuizActive = phase === "question";
+  const isOpen = !isQuizActive && (
+    phase === "cinematic" ? !isCinematicDismissed : isManuallyOpen
+  );
 
   useEffect(() => {
-    if (!isMobileOpen) return;
+    if (!showQuizLock) return;
+    const timer = window.setTimeout(() => setShowQuizLock(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [showQuizLock]);
+
+  useEffect(() => {
+    if (!isOpen) return;
 
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setIsMobileOpen(false);
+      if (event.key === "Escape") {
+        if (phase === "cinematic") setIsCinematicDismissed(true);
+        else setIsManuallyOpen(false);
+      }
     }
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isMobileOpen]);
+  }, [isOpen, phase]);
+
+  function toggleChat() {
+    if (isQuizActive) {
+      setShowQuizLock(false);
+      window.requestAnimationFrame(() => setShowQuizLock(true));
+      return;
+    }
+
+    setShowQuizLock(false);
+    if (phase === "cinematic") {
+      setIsCinematicDismissed(isOpen);
+    } else {
+      setIsManuallyOpen(!isOpen);
+    }
+  }
 
   async function ask(nextQuestion: string) {
     const cleanQuestion = nextQuestion.trim();
@@ -65,31 +102,39 @@ export default function LandmarkChat({ exhibit }: { exhibit: Exhibit }) {
   }
 
   return (
-    <>
+    <aside
+      id="landmark-chat-panel"
+      aria-label={`Ask about ${exhibit.name}`}
+      className={`landmark-chat journey-panel absolute right-3 top-1/2 z-20 w-[min(18rem,calc(100vw-1.5rem))] px-5 py-4 text-white sm:right-5 ${isOpen ? "landmark-chat--open" : "landmark-chat--collapsed"} ${isQuizActive ? "landmark-chat--quiz-locked" : ""}`}
+    >
       <button
         type="button"
-        className={`landmark-chat-launcher ${isMobileOpen ? "landmark-chat-launcher--hidden" : ""}`}
-        aria-expanded={isMobileOpen}
+        className="landmark-chat__toggle"
+        aria-label={isQuizActive
+          ? "Avery chat cannot open during the quiz"
+          : isOpen
+            ? "Collapse Avery chat"
+            : "Open Avery chat"}
+        aria-expanded={isOpen}
+        aria-disabled={isQuizActive}
         aria-controls="landmark-chat-panel"
-        onClick={() => setIsMobileOpen(true)}
+        onClick={toggleChat}
       >
-        Chat with Avery
+        <svg viewBox="0 0 12 20" aria-hidden="true">
+          <path d={isOpen ? "M3 2l6 8-6 8" : "M9 2l-6 8 6 8"} />
+        </svg>
       </button>
-      <aside
-        id="landmark-chat-panel"
-        aria-label={`Ask about ${exhibit.name}`}
-        className={`landmark-chat journey-panel absolute right-3 top-1/2 z-20 w-[min(18rem,calc(100vw-1.5rem))] -translate-y-1/2 px-5 py-4 text-white sm:right-5 ${isMobileOpen ? "landmark-chat--mobile-open" : ""}`}
-      >
+
+      {showQuizLock && (
+        <p className="landmark-chat__quiz-notice" role="status">
+          Cannot open during quiz.
+        </p>
+      )}
+
+      {isOpen && (
+        <div className="landmark-chat__body">
         <header className="landmark-chat__header">
           <h2>Ask Avery</h2>
-          <button
-            type="button"
-            className="landmark-chat__close"
-            aria-label="Close Avery chat"
-            onClick={() => setIsMobileOpen(false)}
-          >
-            ×
-          </button>
         </header>
 
         {messages.length > 0 && (
@@ -121,7 +166,8 @@ export default function LandmarkChat({ exhibit }: { exhibit: Exhibit }) {
           />
           <button type="submit" disabled={isLoading || !question.trim()} aria-label="Ask question">↑</button>
         </form>
-      </aside>
-    </>
+        </div>
+      )}
+    </aside>
   );
 }
