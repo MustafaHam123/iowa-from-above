@@ -8,6 +8,7 @@ import {
   announceGuideSubtitle,
   getStoredAudioMuted,
   GUIDE_AUDIO_EVENT,
+  type GuideAudioDetail,
 } from "./audioPreferences";
 
 const TUTORIAL_STEPS: Array<{
@@ -48,6 +49,26 @@ const MOUTH_FRAME_POSITION = [
   "50% 100%",
   "100% 100%",
 ] as const;
+
+const PHONE_SUBTITLE_WORDS = 7;
+
+function subtitleForPlayback(
+  transcript: string,
+  audio: HTMLAudioElement,
+) {
+  const words = transcript.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= PHONE_SUBTITLE_WORDS) return transcript;
+
+  const duration = audio.duration;
+  const progress = Number.isFinite(duration) && duration > 0
+    ? Math.min(Math.max(audio.currentTime / duration, 0), 0.999999)
+    : 0;
+  const spokenWord = Math.floor(progress * words.length);
+  const start = Math.floor(spokenWord / PHONE_SUBTITLE_WORDS)
+    * PHONE_SUBTITLE_WORDS;
+
+  return words.slice(start, start + PHONE_SUBTITLE_WORDS).join(" ");
+}
 
 function configureNarration(
   narration: HTMLAudioElement,
@@ -121,6 +142,9 @@ export default function TutorialGuide() {
     let source: MediaElementAudioSourceNode | null = null;
     let animationFrame = 0;
     let lastMouthUpdate = 0;
+    let activeTranscript = "";
+    let lastSubtitle = "";
+    let lastSubtitleUpdate = 0;
     let samples: Uint8Array<ArrayBuffer> | null = null;
 
     function stopMouth() {
@@ -136,6 +160,13 @@ export default function TutorialGuide() {
 
     function updateMouth(time: number) {
       if (!activeAudio || activeAudio.paused) return;
+
+      const subtitle = subtitleForPlayback(activeTranscript, activeAudio);
+      if (subtitle !== lastSubtitle || time - lastSubtitleUpdate >= 250) {
+        announceGuideSubtitle(subtitle);
+        lastSubtitle = subtitle;
+        lastSubtitleUpdate = time;
+      }
 
       if (time - lastMouthUpdate >= 70) {
         let nextFrame = 1 + (Math.floor(time / 85) % 5);
@@ -185,12 +216,17 @@ export default function TutorialGuide() {
     }
 
     function followJourneyAudio(event: Event) {
-      const nextAudio = (event as CustomEvent<HTMLAudioElement>).detail;
+      const { audio: nextAudio, transcript } = (
+        event as CustomEvent<GuideAudioDetail>
+      ).detail;
       if (nextAudio === activeAudio) return;
 
       detachAudio();
       stopMouth();
       activeAudio = nextAudio;
+      activeTranscript = transcript;
+      lastSubtitle = "";
+      lastSubtitleUpdate = 0;
       const isPhoneLayout = window.matchMedia(
         "(max-width: 950px) and (max-height: 600px) and (orientation: landscape)",
       ).matches;
@@ -300,6 +336,8 @@ export default function TutorialGuide() {
     let isCurrentStep = true;
     let animationFrame = 0;
     let lastMouthUpdate = 0;
+    let lastSubtitle = "";
+    let lastSubtitleUpdate = 0;
     const audioContext = isPhoneLayout ? null : new AudioContext();
     const analyser = audioContext?.createAnalyser() ?? null;
     if (analyser) {
@@ -320,6 +358,15 @@ export default function TutorialGuide() {
 
     function updateMouth(time: number) {
       if (!isCurrentStep || narration?.paused) return;
+
+      if (narration) {
+        const subtitle = subtitleForPlayback(step.message, narration);
+        if (subtitle !== lastSubtitle || time - lastSubtitleUpdate >= 250) {
+          announceGuideSubtitle(subtitle);
+          lastSubtitle = subtitle;
+          lastSubtitleUpdate = time;
+        }
+      }
 
       if (time - lastMouthUpdate >= 70) {
         let nextFrame = 1 + (Math.floor(time / 85) % 5);
@@ -396,7 +443,7 @@ export default function TutorialGuide() {
       void audioContext?.close();
       if (narration) narration.currentTime = 0;
     };
-  }, [isComplete, isIntroComplete, step.audioSrc, stepIndex]);
+  }, [isComplete, isIntroComplete, step.audioSrc, step.message, stepIndex]);
 
   useEffect(() => {
     if (isComplete) return;

@@ -334,7 +334,7 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
     const guidance = navigationGuidance(JOURNEY_STOPS[status.index]);
     transition("navigate", guidance.message);
     setRoute({ ...stopPosition(), height: drone.height });
-    playGuidance(guidance.audio);
+    playGuidance(guidance.audio, guidance.message);
   }
   function answer(index: number) {
     if (status.phase !== "question" || answered) return;
@@ -367,7 +367,7 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
     if (!audio) return;
 
     audio.currentTime = 0;
-    announceGuideAudio(audio);
+    announceGuideAudio(audio, stop.script[shot]);
     const playingAudio = audio;
     playOwnedAudio(
       playingAudio,
@@ -377,13 +377,13 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
       },
     );
   }
-  function playGuidance(src: string) {
+  function playGuidance(src: string, transcript: string) {
     guidanceAudio?.pause();
     const clip = new Audio(src);
     clip.preload = "auto";
     clip.muted = audioMuted;
     guidanceAudio = clip;
-    announceGuideAudio(clip);
+    announceGuideAudio(clip, transcript);
 
     // A development remount can tear down this controller while play() is
     // still pending. Check ownership again when it settles so an abandoned
@@ -471,7 +471,7 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
       const guidance = navigationGuidance(JOURNEY_STOPS[status.index]);
       transition("navigate", guidance.message);
       setRoute({ ...next, height: drone.height });
-      playGuidance(guidance.audio);
+      playGuidance(guidance.audio, guidance.message);
       return;
     }
     const portalGroundPoint = offset(
@@ -499,7 +499,7 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
     const guidance = portalGuidance(JOURNEY_STOPS[status.index]);
     transition("portal", guidance.message);
     setRoute(portalCenter);
-    playGuidance(guidance.audio);
+    playGuidance(guidance.audio, guidance.message);
   }
   function keydown(event: KeyboardEvent) {
     if (event.repeat || (event.target instanceof HTMLElement && event.target.closest("input,textarea,button,summary,a"))) return;
@@ -628,7 +628,7 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
           const guidance = navigationGuidance(JOURNEY_STOPS[status.index]);
           transition("navigate", guidance.message);
           setRoute({ ...stopPosition(), height: drone.height });
-          playGuidance(guidance.audio);
+          playGuidance(guidance.audio, guidance.message);
         }
         return;
       }
