@@ -1677,3 +1677,96 @@ body:has(.exhibit-article-page)::-webkit-scrollbar-thumb {
   background: #f5f5f5;
   color: #191b20;
 }
+
+/* Environmental controls inherit the original Journey panel surface. */
+.environment-insights { pointer-events: auto; margin-top: 12px; border-top: 1px solid rgb(255 255 255 / 0.1); color: white; font-size: 12px; line-height: 1.5; }
+.environment-insights button { cursor: pointer; }
+.environment-insights button:disabled { opacity: 0.45; cursor: default; }
+.environment-insights button:focus-visible, .environment-insights a:focus-visible, .environment-insights input:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+.environment-insights__trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 10px 0 0; text-align: left; font-size: 12px; color: rgb(255 255 255 / 0.75); }
+.environment-insights small { display: block; font-size: 10px; color: rgb(255 255 255 / 0.6); }
+.environment-insights__body { max-height: min(42dvh, 340px); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #8b8d91 transparent; padding: 12px 3px 3px 0; }
+.environment-insights__body > p { color: rgb(255 255 255 / 0.65); font-size: 11px; }
+.environment-insights__layers { margin-top: 6px; }
+.environment-insights__layer { display: flex; align-items: center; gap: 8px; padding: 10px 0; cursor: pointer; }
+.environment-insights__layer > span:nth-child(2) { flex: 1; }
+.environment-insights__layer strong { font-size: 12px; font-weight: 500; }
+.environment-insights__swatch { width: 5px; height: 22px; border-radius: 2px; }
+.environment-insights__layer input { width: 15px; height: 15px; accent-color: #ddd; }
+.environment-insights__layer-detail { color: rgb(255 255 255 / 0.65); font-size: 10px; padding: 0 0 9px 13px; }
+.environment-insights__layer-detail p + p { margin-top: 7px; color: rgb(255 255 255 / 0.85); }
+.environment-insights__layer-detail button { margin-top: 7px; text-decoration: underline; }
+.environment-insights__legend { padding: 10px 0; border-top: 1px solid #ffffff1a; font-size: 10px; }
+.environment-insights__legend strong { font-weight: 500; }
+.environment-insights__legend > div { display: flex; flex-wrap: wrap; gap: 9px; margin: 7px 0; }
+.environment-insights__legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+.environment-insights__legend p { color: rgb(255 255 255 / 0.6); }
+.environment-insights__nearby { padding-top: 10px; border-top: 1px solid #ffffff1a; }
+.environment-insights__nearby h3 { font-weight: 500; }
+.environment-insights__nearby p { color: rgb(255 255 255 / 0.6); font-size: 10px; margin: 4px 0 7px; }
+.environment-insights__nearby button { display: block; width: 100%; text-align: left; padding: 8px 0; font-size: 10px; border-bottom: 1px solid #ffffff12; }
+.environment-insights__nearby button > span:last-child { float: right; }
+.environment-insights__nearby button:hover { color: white; text-decoration: underline; }
+.environment-insights__selection { position: relative; margin-top: 8px; padding-top: 12px; border-top: 1px solid #ffffff33; }
+.environment-insights__selection h3 { font-size: 12px; font-weight: 500; padding-right: 18px; margin: 4px 0 8px; }
+.environment-insights__selection > p { margin: 6px 0; color: rgb(255 255 255 / 0.7); font-size: 10px; }
+.environment-insights__selection .environment-insights__reading { font-size: 23px; color: white; }
+.environment-insights__reading span { font-size: 11px; }
+.environment-insights__selection a { display: block; font-size: 10px; text-decoration: underline; text-underline-offset: 3px; margin: 10px 0; }
+.environment-insights__close { position: absolute; right: 0; top: 10px; font-size: 18px; width: 22px; }
+.environment-insights__ask { width: 100%; padding: 8px; margin-top: 3px; font-size: 11px; }
+.environment-insights footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; border-top: 1px solid #ffffff1a; margin-top: 10px; padding-top: 10px; font-size: 9px; color: rgb(255 255 255 / 0.6); }
+.environment-insights footer button { text-decoration: underline; text-underline-offset: 3px; }
+.environment-chat-context { color: rgb(255 255 255 / 0.7); font-size: 11px; margin: 7px 0; }
+
+/* Short labels first; explanations use the existing Journey surface. */
+.environment-insights__body { max-height: min(25dvh, 185px); padding-top: 7px; }
+.environment-insights details { min-width: 0; }
+.environment-insights summary, .issue-explanation summary { cursor: pointer; font-size: 11px; color: rgb(255 255 255 / 0.8); }
+.environment-insights details p, .issue-explanation p { font-size: 10px; line-height: 1.45; margin-top: 6px; color: rgb(255 255 255 / 0.65); }
+.environment-insights details a { display: inline-block; margin-top: 6px; font-size: 10px; text-decoration: underline; }
+.environment-insights__layer { align-items: flex-start; padding: 6px 0; gap: 7px; }
+.environment-insights__layer > details { flex: 1; }
+.environment-insights__layer input { margin-top: 2px; width: 13px; height: 13px; }
+.environment-insights__swatch { height: 14px; width: 3px; margin-top: 2px; }
+.environment-insights__layer-detail { padding: 0 0 3px 10px; font-size: 9px; color: rgb(255 255 255 / 0.45); }
+.environment-insights__focus { display: flex; align-items: flex-start; gap: 6px; padding-bottom: 7px; border-bottom: 1px solid #ffffff14; }
+.environment-insights__focus details { flex: 1; }
+.environment-insights__focus > button { padding: 3px 5px; flex-shrink: 0; font-size: 9px; }
+.environment-insights__legend, .environment-insights__nearby { padding: 6px 0; font-size: 10px; }
+.environment-insights__selection { margin-top: 5px; padding-top: 6px; }
+.environment-insights__selection h3 { margin: 0 0 4px; }
+.environment-insights__selection .environment-insights__reading { font-size: 19px; margin: 3px 0; }
+.environment-insights__selection small { font-size: 9px; }
+.environment-insights__selection details { margin-top: 6px; }
+.environment-insights__ask { padding: 5px; margin-top: 7px; }
+.environment-insights footer { margin-top: 4px; padding-top: 5px; }
+.issue-explanation { margin-top: 10px; }
+
+.environment-insights__focus .journey-answer { display: block; margin-top: 7px; padding: 4px 7px; font-size: 10px; }
+
+/* Reading uses the same Journey panel material and outline as exhibit notes. */
+.environment-reading { position: absolute; left: 1.25rem; top: 50%; transform: translateY(-50%); z-index: 24; width: min(18rem, calc(100vw - 2.5rem)); padding: 20px 24px; color: white; outline: none; }
+.environment-reading .environment-field-sign__body { max-height: min(65dvh, 540px); overflow: auto; scrollbar-width: thin; scrollbar-color: #92959a transparent; }
+.environment-reading h2 { margin-top: 8px; }
+.environment-field-sign__place { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; color: rgb(255 255 255 / 0.6); font-size: 10px; }
+.environment-field-sign__place button { padding: 0 3px; color: white; font-size: 18px; line-height: 14px; cursor: pointer; }
+.environment-field-sign__views { display: flex; gap: 12px; border-bottom: 1px solid rgb(255 255 255 / 0.1); margin: 14px 0 10px; }
+.environment-field-sign__views button { padding-bottom: 7px; font-size: 10px; color: rgb(255 255 255 / 0.55); cursor: pointer; border-bottom: 1px solid transparent; }
+.environment-field-sign__views button[aria-selected="true"] { color: white; border-bottom-color: white; }
+.environment-field-sign__body p { font-size: 12px; line-height: 1.55; color: rgb(255 255 255 / 0.78); margin: 9px 0; }
+.environment-field-sign__body small { display: block; font-size: 10px; color: rgb(255 255 255 / 0.55); }
+.environment-field-sign__responses { display: flex; gap: 6px; flex-wrap: wrap; }
+.environment-field-sign__responses button { padding: 6px 8px; cursor: pointer; font-size: 10px; }
+.environment-field-sign__responses button[aria-pressed="true"] { outline: 1px solid rgb(255 255 255 / 0.7); outline-offset: 2px; }
+.environment-field-sign__body .environment-field-sign__measurement { font-size: 20px; font-weight: 500; color: white; }
+.environment-field-sign__body a { color: rgb(255 255 255 / 0.9); text-decoration: underline; text-underline-offset: 3px; font-size: 10px; }
+.environment-field-sign__body footer { display: flex; justify-content: space-between; gap: 10px; padding-top: 12px; margin-top: 14px; border-top: 1px solid rgb(255 255 255 / 0.1); }
+.environment-field-sign__body footer button { color: white; cursor: pointer; font-size: 10px; text-decoration: underline; text-underline-offset: 3px; }
+.environment-field-sign__body button:disabled { opacity: 0.4; cursor: default; }
+.environment-reading button:focus-visible, .environment-reading a:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+@media (max-width: 639px) { .environment-reading { left: 0.75rem; width: min(17rem, calc(100vw - 1.5rem)); } }
+.environment-insights__sign-toggle { display: flex; justify-content: space-between; align-items: center; padding: 3px 0 7px; font-size: 11px; color: #ffffffbf; }
+.environment-insights__sign-toggle input { accent-color: #ddd; width: 13px; height: 13px; }
+.environment-insights__advanced { padding-top: 5px; border-top: 1px solid #ffffff1a; }
+.environment-insights__advanced > summary { color: #ffffff80; }

@@ -17,7 +17,7 @@ declare const Bun: {
 };
 
 const VOICE_ID = "hpp4J3VqNfWAUOO0d1Us";
-const STAGING_ROOT = "/private/tmp/iowa-from-above-narration-20260907";
+const STAGING_ROOT = "/private/tmp/iowa-environmental-narration-v2";
 const OUTPUT_ROOT = join(process.cwd(), "public/audio");
 
 const tutorial = [
@@ -38,13 +38,12 @@ const journey = JOURNEY_STOPS.flatMap((stop) =>
     text,
   })),
 );
-const guidance = [
-  ...JOURNEY_STOPS.map((stop) => navigationGuidance(stop)),
-  ...JOURNEY_STOPS.slice(1).map((stop) => portalGuidance(stop)),
-].map((clip) => ({
-  path: clip.audio.replace(/^\/audio\//, ""),
-  text: clip.message,
-}));
+const guidance = JOURNEY_STOPS.flatMap((stop, index) => [
+  { path: `guidance/navigate-${stop.id}.mp3`, text: navigationGuidance(stop).message },
+  ...(index > 0
+    ? [{ path: `guidance/portal-${stop.id}.mp3`, text: portalGuidance(stop).message }]
+    : []),
+]);
 const clips = [
   ...tutorial.map(([path, text]) => ({ path, text })),
   ...journey,

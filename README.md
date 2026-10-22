@@ -2,7 +2,7 @@
 
 Explore Iowa from a new perspective.
 
-**Iowa From Above** is an interactive 3D educational experience where players pilot a drone across Iowa, discover landmarks, complete missions, and learn about the history, culture, architecture, and geography behind each location.
+**Iowa From Above** makes Iowa’s environmental challenges visible through geographic exploration. Twelve real places explain water quality, nutrient runoff, flooding, erosion and habitat protection, with official observations and practical responses.
 
 The project was built for the Congressional App Challenge.
 
@@ -14,9 +14,9 @@ Throughout the experience, players can:
 
 - Fly through a 3D recreation of Iowa
 - Travel between different parts of the state through portals
-- Discover 12 major Iowa landmarks
+- Explore 12 environmental issues at real Iowa places
 - Watch cinematic introductions to each location
-- Learn facts and history from an interactive guide
+- Learn the problem, community impact and possible responses
 - Complete questions and challenges
 - Earn flight boosts and other rewards
 - Explore additional information about each landmark
@@ -26,7 +26,7 @@ The goal is to make learning about Iowa feel more like exploring a world than re
 
 ## AI Tour Guide
 
-The in-game guide can answer questions about landmarks while the player explores.
+The in-game guide can answer questions about environmental issues while the player explores.
 
 The browser does **not** communicate directly with the AI provider.
 
@@ -138,7 +138,7 @@ If you clone this project, you will need to provide your own API credentials thr
 
 Iowa From Above was created as a submission for the 2026 Congressional App Challenge.
 
-The project explores how interactive 3D environments can be used to make local history and geography more engaging by allowing users to actually explore the places they are learning about.
+The project connects Iowa’s environmental problems with real landscapes, official evidence and conservation responses. The 3D view supports that purpose.
 
 ## Author
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "cesium/Build/Cesium/Widgets/widgets.css";
 import { SITE_DESCRIPTION, SITE_NAME, getSiteUrl } from "./site";
 
 const siteUrl = getSiteUrl();
@@ -7,7 +8,7 @@ const siteUrl = getSiteUrl();
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   applicationName: SITE_NAME,
-  title: "Iowa From Above | Interactive 3D Iowa History Tour",
+  title: "Iowa From Above | Iowa’s Environmental Challenges",
   description: SITE_DESCRIPTION,
   alternates: { canonical: "/" },
   authors: [{ name: "Mustafa Hameed" }],
@@ -15,10 +16,10 @@ export const metadata: Metadata = {
   publisher: "Iowa From Above",
   category: "education",
   keywords: [
-    "Iowa history",
-    "Iowa landmarks",
+    "Iowa water quality",
+    "Iowa environmental issues",
     "interactive Iowa map",
-    "3D Iowa tour",
+    "Iowa watershed exploration",
     "Iowa education",
     "virtual field trip",
   ],
@@ -34,7 +35,7 @@ export const metadata: Metadata = {
     },
   },
   openGraph: {
-    title: "Iowa From Above | Interactive 3D Iowa History Tour",
+    title: "Iowa From Above | Iowa’s Environmental Challenges",
     description: SITE_DESCRIPTION,
     type: "website",
     url: "/",
@@ -43,7 +44,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Iowa From Above | Interactive 3D Iowa History Tour",
+    title: "Iowa From Above | Iowa’s Environmental Challenges",
     description: SITE_DESCRIPTION,
   },
 };

@@ -84,7 +84,7 @@ export default function OutroSequence({
       >
         {step === "thanks" && (
           <p className="max-w-3xl text-center font-serif text-3xl leading-relaxed text-white sm:text-5xl">
-            Thanks for playing.
+            Keep protecting Iowa.
           </p>
         )}
 
@@ -104,10 +104,10 @@ export default function OutroSequence({
         {step === "actions" && (
           <div className="grid max-w-xl place-items-center text-center text-white">
             <p className="font-serif text-3xl leading-tight sm:text-5xl">
-              Keep exploring from above.
+              Find what helps.
             </p>
             <p className="mt-4 max-w-md text-base leading-7 text-white/65 sm:text-lg">
-              Replay the journey, or use the map to fly to any Iowa address.
+              Explore local solutions.
             </p>
             <div className="mt-8 flex w-full max-w-sm flex-col gap-3 sm:max-w-none sm:flex-row sm:justify-center">
               <button
@@ -116,14 +116,14 @@ export default function OutroSequence({
                 onClick={() => leaveOutro(onReplay)}
                 className="min-h-12 rounded-sm border border-white bg-white px-6 py-3 font-medium text-black transition-colors hover:bg-white/85 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
               >
-                Replay the journey
+                Replay journey
               </button>
               <button
                 type="button"
                 onClick={() => leaveOutro(onVisitAddress)}
                 className="min-h-12 rounded-sm border border-white/35 bg-white/5 px-6 py-3 font-medium text-white transition-colors hover:border-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
               >
-                Visit my Iowa address
+                Visit address
               </button>
             </div>
           </div>

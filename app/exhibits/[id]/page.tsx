@@ -28,13 +28,13 @@ export async function generateMetadata({ params }: ExhibitPageProps): Promise<Me
       description: exhibit.summary,
       type: "article",
       url: `/exhibits/${exhibit.id}`,
-      images: [{ url: exhibit.image.url, alt: exhibit.image.alt }],
+      images: exhibit.image ? [{ url: exhibit.image.url, alt: exhibit.image.alt }] : undefined,
     },
     twitter: {
       card: "summary_large_image",
       title: `${exhibit.name} | Iowa From Above`,
       description: exhibit.summary,
-      images: [exhibit.image.url],
+      images: exhibit.image ? [exhibit.image.url] : undefined,
     },
   };
 }
@@ -60,21 +60,20 @@ export default async function ExhibitPage({ params }: ExhibitPageProps) {
 
         <div className="exhibit-article__copy" id="overview">
           <p className="exhibit-article__lead">{exhibit.summary}</p>
-          <p>{exhibit.article.intro}</p>
 
-          <figure className="exhibit-article__figure">
+          {exhibit.image && <figure className="exhibit-article__figure">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={exhibit.image.url} alt={exhibit.image.alt} />
             <figcaption>
               {exhibit.image.alt}. Image: <a href={exhibit.image.source} target="_blank" rel="noreferrer">{exhibit.image.credit}</a>
             </figcaption>
-          </figure>
+          </figure>}
 
+          <h2>Why it matters</h2>
           <p>{exhibit.article.story}</p>
-          <p id="fact">{exhibit.funFact}</p>
-          <p id="statistic"><strong>{exhibit.statistic.value} {exhibit.statistic.label}.</strong> {exhibit.statistic.detail}</p>
+          <h2>What helps</h2>
           <p>{exhibit.article.importance}</p>
-          <p>{exhibit.article.lookFor}</p>
+          <details><summary>Using evidence</summary><p>{exhibit.article.lookFor}</p></details>
         </div>
 
         <footer className="exhibit-article__sources">

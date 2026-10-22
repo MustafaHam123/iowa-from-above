@@ -15,7 +15,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       url: `${siteUrl}/exhibits/${exhibit.id}`,
       changeFrequency: "yearly" as const,
       priority: 0.7,
-      images: [`${siteUrl}${exhibit.image.url}`],
+      images: exhibit.image ? [`${siteUrl}${exhibit.image.url}`] : undefined,
     })),
   ];
 }

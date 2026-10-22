@@ -1,6 +1,6 @@
 export const SITE_NAME = "Iowa From Above";
 export const SITE_DESCRIPTION =
-  "Take to the skies in an interactive 3D tour of Iowa's landmarks, communities, landscapes, and stories.";
+  "Explore Iowa’s environmental challenges through real places, official water data, flood maps and practical conservation lessons.";
 
 export function getSiteUrl() {
   const siteHost =

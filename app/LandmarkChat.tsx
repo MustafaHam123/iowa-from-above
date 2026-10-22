@@ -1,23 +1,29 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { ENVIRONMENT_TOPICS } from "./environment";
+import type { EnvironmentalSelection } from "./EnvironmentalInsights";
 import type { Exhibit } from "./exhibits";
 import type { JourneyPhase } from "./journeyStops";
 
 type ChatMessage = { role: "user" | "assistant"; text: string };
 
 const SUGGESTED_QUESTIONS = [
-  "Why is this place important?",
-  "What should I notice from above?",
-  "Tell me one surprising fact.",
+  "What’s the problem?",
+  "What could help?",
+  "Explain the evidence.",
 ] as const;
 
 export default function LandmarkChat({
   exhibit,
   phase,
+  environmentalSelection,
+  environmentalChatRequest = 0,
 }: {
   exhibit: Exhibit;
   phase: JourneyPhase;
+  environmentalSelection?: EnvironmentalSelection | null;
+  environmentalChatRequest?: number;
 }) {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -50,6 +56,16 @@ export default function LandmarkChat({
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isOpen, phase]);
 
+  useEffect(() => {
+    if (!environmentalChatRequest) return;
+    const frame = window.requestAnimationFrame(() => {
+      setIsManuallyOpen(true);
+      setIsCinematicDismissed(false);
+      setQuestion(environmentalSelection ? ENVIRONMENT_TOPICS[environmentalSelection.feature.properties.layer].question : "What could help here?");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [environmentalChatRequest, environmentalSelection]);
+
   function toggleChat() {
     if (isQuizActive) {
       setShowQuizLock(false);
@@ -77,7 +93,7 @@ export default function LandmarkChat({
       const response = await fetch("/api/landmark-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exhibitId: exhibit.id, question: cleanQuestion }),
+        body: JSON.stringify({ exhibitId: exhibit.id, question: cleanQuestion, environment: environmentalSelection ? { layer: environmentalSelection.feature.properties.layer, id: environmentalSelection.feature.id, lat: environmentalSelection.lat, lng: environmentalSelection.lng } : undefined }),
       });
       const payload = await response.json() as { answer?: string; error?: string };
       setMessages((current) => [...current, {
@@ -135,6 +151,7 @@ export default function LandmarkChat({
         <div className="landmark-chat__body">
         <header className="landmark-chat__header">
           <h2>Ask Avery</h2>
+          <p className="environment-chat-context">{environmentalSelection ? environmentalSelection.feature.properties.name : exhibit.name}</p>
         </header>
 
         {messages.length > 0 && (
@@ -148,7 +165,7 @@ export default function LandmarkChat({
 
         {messages.length === 0 && (
           <div className="landmark-chat__suggestions">
-            {SUGGESTED_QUESTIONS.map((suggestion) => (
+            {(environmentalSelection ? [ENVIRONMENT_TOPICS[environmentalSelection.feature.properties.layer].question, "Why here?"] : SUGGESTED_QUESTIONS).map((suggestion) => (
               <button key={suggestion} type="button" onClick={() => void ask(suggestion)}>
                 {suggestion}
               </button>
@@ -161,7 +178,7 @@ export default function LandmarkChat({
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             maxLength={300}
-            placeholder="Ask about this place"
+            placeholder={environmentalSelection ? "Ask about Iowa’s water" : "Ask Avery"}
             aria-label={`Question about ${exhibit.name}`}
           />
           <button type="submit" disabled={isLoading || !question.trim()} aria-label="Ask question">↑</button>
