@@ -13,6 +13,10 @@ import { INITIAL_JOURNEY, JOURNEY_STOPS } from "./journeyStops";
 import { EXHIBITS } from "./exhibits";
 import LandmarkChat from "./LandmarkChat";
 import EnvironmentalFieldSigns from "./EnvironmentalFieldSigns";
+import { loadFlightSession, saveFlightSession, clearFlightSession, FLIGHT_RESET_EVENT } from "./flightSession";
+import PlaceScanner from "./PlaceScanner";
+import PlaceCompanion from "./PlaceCompanion";
+import { previewPlaceId } from "./companionLinks";
 import EnvironmentalInsights, { type EnvironmentalSelection } from "./EnvironmentalInsights";
 import OutroSequence from "./OutroSequence";
 import {
@@ -433,6 +437,7 @@ export default function IowaTileMap() {
   const [environmentalSelection, setEnvironmentalSelection] = useState<EnvironmentalSelection | null>(null);
   const [environmentalChatRequest, setEnvironmentalChatRequest] = useState(0);
   const [fieldSignsEnabled, setFieldSignsEnabled] = useState(true);
+  const [scannerOpen, setScannerOpen] = useState(false);
   const cesiumRef = useRef<HTMLDivElement>(null);
   const droneOverlayRef = useRef<HTMLDivElement>(null);
   const altitudeReadoutRef = useRef<HTMLOutputElement>(null);
@@ -898,15 +903,17 @@ export default function IowaTileMap() {
       });
 
     const savedJourneyCheckpoint = loadJourneyCheckpoint();
+    const linkedPlaceId = previewPlaceId();
+    const savedFlight = loadFlightSession();
     let latestJourneyCheckpoint: JourneyCheckpoint | undefined =
       savedJourneyCheckpoint;
-    const initialDronePosition = savedJourneyCheckpoint?.position ?? {
+    const initialDronePosition = savedFlight?.position ?? savedJourneyCheckpoint?.position ?? {
       lat: DRONE_START.lat,
       lng: DRONE_START.lng,
       height: DRONE_START.height,
       heading: Cesium.Math.toRadians(74.5),
     };
-    boostChargesRef.current = savedJourneyCheckpoint?.boostCharges ?? 0;
+    boostChargesRef.current = savedFlight?.boostCharges ?? savedJourneyCheckpoint?.boostCharges ?? 0;
     setBoostStatus({
       charges: boostChargesRef.current,
       active: false,
@@ -1156,6 +1163,8 @@ export default function IowaTileMap() {
       onStatus: setJourneyStatus,
       onCorrectAnswer: awardBoost,
       resumeCheckpoint: savedJourneyCheckpoint,
+      resumeSession: savedFlight,
+      previewStopId: linkedPlaceId ?? undefined,
       onLandmarkCompleted: (completed, position) => {
         latestJourneyCheckpoint = {
           completed,
@@ -1188,7 +1197,18 @@ export default function IowaTileMap() {
         setCameraOnDrone();
       },
     });
+    let sessionWritesEnabled = true;
+    const persistFlight = () => {
+      if (!sessionWritesEnabled) return;
+      const snapshot = journey.snapshot(boostChargesRef.current);
+      if (snapshot) saveFlightSession(snapshot);
+    };
+    const stopSessionWrites = () => { sessionWritesEnabled = false; };
+    const saveTimer = window.setInterval(persistFlight, 2_000);
+    window.addEventListener("pagehide", persistFlight);
+    window.addEventListener(FLIGHT_RESET_EVENT, stopSessionWrites);
     function handleVisibilityChange() {
+      if (document.hidden) persistFlight();
       const isVisible = !document.hidden;
 
       viewer.useDefaultRenderLoop = isVisible;
@@ -1766,6 +1786,10 @@ export default function IowaTileMap() {
     });
 
     return () => {
+      persistFlight();
+      window.clearInterval(saveTimer);
+      window.removeEventListener("pagehide", persistFlight);
+      window.removeEventListener(FLIGHT_RESET_EVENT, stopSessionWrites);
       isDestroyed = true;
       removeTick();
       removeSkyOrientation();
@@ -1805,6 +1829,7 @@ export default function IowaTileMap() {
     <main className="fixed inset-0 overflow-hidden bg-black">
       <div ref={cesiumRef} className="absolute inset-0" />
       <div ref={droneOverlayRef} className="pointer-events-none absolute inset-0 z-10" />
+      {scannerOpen && <PlaceScanner onClose={() => setScannerOpen(false)} />}
       <EnvironmentalFieldSigns viewerRef={viewerRef} positionRef={environmentalPositionRef} issueId={currentExhibit.id} enabled={fieldSignsEnabled} />
       <details
         className="api-stats-menu absolute right-3 top-3 z-20 text-white sm:right-5"
@@ -2031,6 +2056,7 @@ export default function IowaTileMap() {
                   : JOURNEY_STOPS[journeyStatus.index].name}
           </p>
           {(journeyStatus.phase === "navigate" || journeyStatus.phase === "portal") && <p className="mt-1 text-xs text-white/60">{journeyStatus.direction} · {journeyStatus.distance.toLocaleString()} m</p>}
+          {journeyStatus.phase === "explore" && <button onClick={() => { clearFlightSession(); window.location.assign(new URL("/", window.location.origin).href); }} className="journey-restart pointer-events-auto mt-2 inline-block text-xs underline">Resume journey</button>}
           {journeyStatus.phase === "complete" && (
             <button
               type="button"
@@ -2044,12 +2070,13 @@ export default function IowaTileMap() {
             </button>
           )}
         </div>
+        <div className="journey-phone pointer-events-auto"><PlaceCompanion key={currentExhibit.id} id={currentExhibit.id} name={currentExhibit.name} onScan={() => setScannerOpen(true)} /></div>
         <EnvironmentalInsights viewerRef={viewerRef} positionRef={environmentalPositionRef} onSelection={setEnvironmentalSelection} onAsk={() => setEnvironmentalChatRequest((n) => n + 1)} chatAvailable={journeyStatus.phase !== "tutorial" && journeyStatus.phase !== "question"} signsEnabled={fieldSignsEnabled} onSignsChange={setFieldSignsEnabled} />
         </aside>
         <div className="mobile-journey-objective" aria-live="polite">
           {journeyStatus.phase === "portal"
             ? "Portal"
-            : journeyStatus.phase === "navigate"
+            : (journeyStatus.phase === "navigate" || journeyStatus.phase === "explore")
               ? JOURNEY_STOPS[journeyStatus.index].name
               : journeyStatus.phase === "complete"
                 ? "Journey complete"

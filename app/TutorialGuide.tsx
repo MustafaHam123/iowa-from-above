@@ -3,6 +3,8 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { INITIAL_JOURNEY, type JourneyStatus } from "./journeyStops";
 import { loadJourneyCheckpoint } from "./journeyProgress";
+import { loadFlightSession } from "./flightSession";
+import { previewPlaceId } from "./companionLinks";
 import {
   AUDIO_MUTED_EVENT,
   announceGuideSubtitle,
@@ -104,7 +106,7 @@ export default function TutorialGuide() {
   }, [isComplete, journey.caption, journey.message, journey.phase, step.message]);
 
   useEffect(() => {
-    if (!loadJourneyCheckpoint()) {
+    if (!loadJourneyCheckpoint() && !loadFlightSession() && !previewPlaceId()) {
       return;
     }
 

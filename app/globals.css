@@ -1770,3 +1770,48 @@ body:has(.exhibit-article-page)::-webkit-scrollbar-thumb {
 .environment-insights__sign-toggle input { accent-color: #ddd; width: 13px; height: 13px; }
 .environment-insights__advanced { padding-top: 5px; border-top: 1px solid #ffffff1a; }
 .environment-insights__advanced > summary { color: #ffffff80; }
+
+/* Companion controls share the Journey material, with camera access on demand. */
+.place-companion { font-size: 11px; }
+.place-companion__actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.place-companion__trigger { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.place-companion__trigger svg { width: 18px; height: 18px; }
+.place-companion__scan { min-height: 36px; font-size: 11px; color: #ffffffa8; cursor: pointer; }
+.place-companion button:focus-visible, .place-companion a:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+.place-companion__code { display: flex; align-items: center; gap: 14px; padding: 8px 0 12px; }
+.place-companion__code img { display: block; flex: 0 0 auto; width: 120px; height: 120px; border-radius: 8px; }
+.place-companion__code p { margin: 0 0 7px; font-size: 13px; line-height: 1.4; }
+.place-companion__code small { display: block; color: #ffffff99; font-size: 11px; line-height: 1.5; }
+.place-companion__code a { display: inline-block; margin-top: 10px; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+.journey-phone { border-top: 1px solid #ffffff1a; margin-top: 12px; padding-top: 3px; }
+.journey-phone .place-companion__code { flex-direction: column; text-align: center; gap: 10px; }
+.journey-phone .place-companion__code p br { display: block; }
+.journey-phone .place-companion__code p { font-size: 12px; }
+.place-landing .place-companion { border-block: 1px solid #ffffff1a; padding-block: 5px; margin-top: 20px; }
+.place-landing .place-companion__code img { width: 144px; height: 144px; }
+@media (max-width: 380px) { .place-landing .place-companion__code { flex-direction: column; align-items: flex-start; } }
+.place-scanner { width: min(25rem, calc(100vw - 2rem)); max-height: 85dvh; overflow-y: auto; border: 0; padding: 24px; color: white; background: #24272c; border-radius: 14px; }
+.place-scanner::backdrop { background: #0009; }
+.place-scanner__heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.place-scanner h2 { font-size: 18px; font-weight: 600; }
+.place-scanner__heading button { width: 32px; height: 32px; cursor: pointer; font-size: 22px; }
+.place-scanner p { font-size: 12px; color: #ffffffa8; margin: 12px 0; }
+.place-scanner video { width: 100%; max-height: 240px; border-radius: 10px; object-fit: cover; }
+.place-scanner .journey-answer { padding: 9px 12px; cursor: pointer; font-size: 12px; }
+.place-scanner__alternatives { margin-top: 20px; font-size: 12px; }
+.place-scanner__alternatives summary { cursor: pointer; color: #ffffffb3; }
+.place-scanner__file { display: block; font-size: 12px; margin: 16px 0; }
+.place-scanner__file input { display: block; margin-top: 8px; max-width: 100%; font-size: 12px; }
+.place-scanner form { display: flex; gap: 8px; flex-wrap: wrap; }
+.place-scanner form input { width: 100%; background: #ffffff0d; border: 1px solid #ffffff25; border-radius: 7px; padding: 9px; font-size: 16px; }
+.place-scanner button:focus-visible, .place-scanner input:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+.place-landing { min-height: 100dvh; display: grid; place-items: center; padding: 32px 24px; background: #17191d; color: white; }
+.place-landing article { position: relative; max-width: 34rem; width: 100%; padding: 28px; }
+.place-landing__brand { border-radius: 12px; margin-bottom: 22px; }
+.place-landing h1 { font-size: clamp(24px, 5vw, 36px); font-weight: 600; margin: 9px 0 18px; }
+.place-landing p { font-size: 14px; line-height: 1.65; color: #ffffffb3; }
+.place-landing__actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+.place-landing__actions a { padding: 12px 16px; }
+.place-landing details { margin: 18px 0; font-size: 13px; }
+.place-landing summary { cursor: pointer; }
+.place-landing details a { display: block; margin-top: 10px; text-decoration: underline; }

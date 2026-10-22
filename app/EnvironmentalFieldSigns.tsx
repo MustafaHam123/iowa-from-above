@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import * as C from "cesium";
+import { createLandmarkProximity } from "./landmarkProximity";
 import { JOURNEY_STOPS } from "./journeyStops";
 import { ENVIRONMENTAL_ISSUES } from "./environmentalJourney";
 import { ENVIRONMENTAL_STORIES, containsLocation, distanceKm } from "./environmentalStories";
@@ -16,6 +17,8 @@ export default function EnvironmentalFieldSigns({ viewerRef, positionRef, issueI
   issueId: string; enabled: boolean;
 }) {
   const readerRef = useRef<HTMLElement>(null);
+  const proximity = useRef(createLandmarkProximity(JOURNEY_STOPS));
+  const automaticOpen = useRef(false);
   const closeReaderRef = useRef<() => void>(() => {});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [view, setView] = useState<View>("Problem");
@@ -27,20 +30,22 @@ export default function EnvironmentalFieldSigns({ viewerRef, positionRef, issueI
 
   useEffect(() => {
     closeReaderRef.current = () => {
+      if (expandedRef.current) proximity.current.dismiss(expandedRef.current);
+      expandedRef.current = null;
       setExpanded(null);
       viewerRef.current?.scene.canvas.focus({ preventScroll: true });
     };
   }, [viewerRef]);
 
   useEffect(() => {
-    if (enabled) return;
+    if (enabled) { proximity.current = createLandmarkProximity(JOURNEY_STOPS); return; }
     const frame=window.requestAnimationFrame(()=>{expandedRef.current=null;setExpanded(null);});
     return ()=>window.cancelAnimationFrame(frame);
   }, [enabled]);
 
   useEffect(() => {
     if (!expanded || !enabled) return;
-    readerRef.current?.focus({ preventScroll: true });
+    if (!automaticOpen.current) readerRef.current?.focus({ preventScroll: true });
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); closeReaderRef.current(); } };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -75,7 +80,7 @@ export default function EnvironmentalFieldSigns({ viewerRef, positionRef, issueI
         ctx.shadowColor="rgba(0,0,0,0.95)";ctx.shadowBlur=10;
         ctx.fillStyle="white";ctx.font="600 48px sans-serif";ctx.fillText(issue.title,520,100,810);
         ctx.font="32px sans-serif";ctx.fillText(story.signal,520,164,810);
-        ctx.fillStyle="rgba(255,255,255,0.8)";ctx.font="27px sans-serif";ctx.fillText("Hover nearby",520,242,810);
+        ctx.fillStyle="rgba(255,255,255,0.8)";ctx.font="27px sans-serif";ctx.fillText("Fly nearby",520,242,810);
         const world=C.Cartesian3.fromDegrees(stop.lng,stop.lat,stop.elevation+50);
         const entity=owned.entities.add({
           position:world, properties:{fieldSignId:stop.id},
@@ -89,6 +94,8 @@ export default function EnvironmentalFieldSigns({ viewerRef, positionRef, issueI
       let lastUpdate=0;
       const update=()=>{
         const now=performance.now();if(now-lastUpdate<100)return;lastUpdate=now;
+        const nearby = proximity.current.update(positionRef.current);
+        if (nearby) openSign(nearby, true);
         const ordered=[...anchors].sort((a,b)=>Number(b.stop.id===issueId)-Number(a.stop.id===issueId)||distanceKm(positionRef.current,a.stop)-distanceKm(positionRef.current,b.stop));
         const navigationTags = new Set(viewer.entities.values
           .filter((entity)=>entity.show && entity.plane)
@@ -115,8 +122,10 @@ export default function EnvironmentalFieldSigns({ viewerRef, positionRef, issueI
         const id=picked?.id?.properties?.fieldSignId?.getValue();
         return typeof id==="string" ? JOURNEY_STOPS.find((stop)=>stop.id===id) : undefined;
       };
-      const openSign=(stop:typeof JOURNEY_STOPS[number])=>{
+      const openSign=(stop:typeof JOURNEY_STOPS[number], automatic=false)=>{
         if(distanceKm(positionRef.current,stop)>0.75 || expandedRef.current===stop.id)return;
+        automaticOpen.current = automatic;
+        proximity.current.opened(stop.id);
         expandedRef.current=stop.id;
         setExpanded(stop.id);setView("Problem");setResponse(0);
       };

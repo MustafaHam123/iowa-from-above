@@ -6,6 +6,7 @@ import {
   portalGuidance,
   type JourneyStatus,
 } from "./journeyStops";
+import type { FlightSession } from "./flightSession";
 import type { JourneyCheckpoint } from "./journeyProgress";
 import {
   announceGuideAudio,
@@ -25,6 +26,8 @@ type Options = {
   onCorrectAnswer: () => void;
   onLandmarkCompleted: (completed: number, position: Position) => void;
   resumeCheckpoint?: JourneyCheckpoint;
+  resumeSession?: FlightSession;
+  previewStopId?: string;
 };
 export type CinematicCameraSettings = {
   heading: number;
@@ -564,7 +567,43 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
 
   const checkpoint = options.resumeCheckpoint;
 
-  if (checkpoint) {
+  const previewIndex = JOURNEY_STOPS.findIndex((stop) => stop.id === options.previewStopId);
+  const session = options.resumeSession;
+  const resumeSession = session && (previewIndex < 0 || (session.phase === "explore" && session.stopId === options.previewStopId));
+  if (resumeSession) {
+    options.warp({ ...session.position });
+    status = { ...INITIAL_JOURNEY, index: JOURNEY_STOPS.findIndex(stop => stop.id === session.stopId), completed: session.completed };
+    if (session.phase === "explore" || session.phase === "complete") {
+      transition(session.phase, session.phase === "explore" ? `Explore ${JOURNEY_STOPS[status.index].guideName ?? JOURNEY_STOPS[status.index].name}.` : "All twelve stops explored. You can keep exploring Iowa.");
+    } else if (session.phase === "cinematic" || session.phase === "question") {
+      startTour();
+      if (session.phase === "question") {
+        showQuestion();
+        if (session.completed > status.index) {
+          answered = true; status.selectedAnswer = JOURNEY_STOPS[status.index].answer; status.answerCorrect = true;
+          status.feedback = "Correct. Press Enter to continue."; emit();
+        }
+      } else if (session.shot > 0) {
+        audio?.pause(); playTourSegment(session.shot);
+      }
+    } else if (session.phase === "portal" && session.portalPosition) {
+      portalCenter = { ...session.portalPosition };
+      portalBody.position = new C.ConstantPositionProperty(world(portalCenter)); portalBody.show = true;
+      previousPortalDroneWorld = world(drone);
+      const guidance = portalGuidance(JOURNEY_STOPS[status.index]);
+      transition("portal", guidance.message); setRoute(portalCenter);
+    } else {
+      const guidance = navigationGuidance(JOURNEY_STOPS[status.index]);
+      transition("navigate", guidance.message); setRoute({ ...stopPosition(), height: drone.height });
+    }
+  } else if (previewIndex >= 0) {
+    const place = JOURNEY_STOPS[previewIndex];
+    status = { ...INITIAL_JOURNEY, phase: "explore", index: previewIndex, completed: checkpoint?.completed ?? 0,
+      message: `Explore ${place.guideName ?? place.name}.` };
+    options.warp({ lat: place.lat - 0.003, lng: place.lng - 0.006, height: place.elevation + 230, heading: radians(58) });
+    announceGuideSubtitle(status.message);
+    emit();
+  } else if (checkpoint) {
     options.warp({ ...checkpoint.position });
     status = {
       ...INITIAL_JOURNEY,
@@ -576,17 +615,23 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
   }
 
   return {
+    snapshot(boostCharges: number): FlightSession | undefined {
+      if (status.phase === "transfer") return undefined;
+      return { version: 1, stopId: JOURNEY_STOPS[status.index].id, phase: status.phase,
+        completed: status.completed, shot: status.shot, position: { ...drone }, boostCharges,
+        ...(status.phase === "portal" ? { portalPosition: { ...portalCenter } } : {}) };
+    },
     get locked() { return ["cinematic", "question", "transfer"].includes(status.phase); },
     get isResting() { return status.phase === "question"; },
     get flightBoundaryCenter() {
-      return status.phase === "complete"
+      return (status.phase === "complete" || status.phase === "explore")
         ? null
         : { lat: target.lat, lng: target.lng };
     },
     tick(delta: number) {
       if (document.hidden) return;
       elapsed += delta; phaseTime += delta;
-      if (status.phase === "tutorial" || status.phase === "complete") return;
+      if (status.phase === "tutorial" || status.phase === "complete" || status.phase === "explore") return;
       if (status.phase === "cinematic") {
         segmentTime += delta;
         // Each composition waits for its own recording to finish. No tile
