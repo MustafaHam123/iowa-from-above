@@ -3,6 +3,8 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { loadJourneyCheckpoint } from "./journeyProgress";
+import { loadFlightSession } from "./flightSession";
+import { previewPlaceId } from "./companionLinks";
 
 const INTRO_STEPS = [
   { type: "text", content: "Iowa From Above", holdMs: 1_200 },
@@ -33,7 +35,7 @@ export default function IntroSequence() {
   const [skipProgress, setSkipProgress] = useState(0);
 
   useEffect(() => {
-    if (!loadJourneyCheckpoint()) {
+    if (!loadJourneyCheckpoint() && !loadFlightSession() && !previewPlaceId()) {
       return;
     }
 

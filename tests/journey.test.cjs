@@ -22,6 +22,8 @@ Module._load = function(name, ...args) {
 };
 const { createJourneyController } = require('../app/journeyController.ts');
 const { JOURNEY_STOPS } = require('../app/journeyStops.ts');
+const { loadFlightSession, saveFlightSession, clearFlightSession } = require('../app/flightSession.ts');
+const { createLandmarkProximity } = require('../app/landmarkProximity.ts');
 const { clearJourneyCheckpoint, loadJourneyCheckpoint, saveJourneyCheckpoint } = require('../app/journeyProgress.ts');
 Module._load = originalLoad;
 
@@ -82,6 +84,8 @@ function setup(options = {}) {
     onCorrectAnswer() { rewards++; },
     onLandmarkCompleted(completed, position) { checkpoint = { completed, position }; },
     resumeCheckpoint: options.resumeCheckpoint,
+    resumeSession: options.resumeSession,
+    previewStopId: options.previewStopId,
   });
   return {
     controller, viewer, drone,
@@ -425,4 +429,110 @@ test('landmark progress persists as a validated device checkpoint', () => {
   assert.equal(loadJourneyCheckpoint(), undefined);
   assert.equal(values.has('iowa-from-above:journey-checkpoint:v1'), false);
   assert.equal(values.get('iowa-from-above-audio-muted'), 'true', 'restart must preserve audio preferences');
+});
+
+test('app deep links preview a place without completing or overwriting the journey', () => {
+  const app = setup({ previewStopId: 'high-trestle' });
+  assert.equal(app.status.phase, 'explore');
+  assert.equal(JOURNEY_STOPS[app.status.index].id, 'high-trestle');
+  assert.equal(app.status.completed, 0);
+  assert.equal(app.controller.flightBoundaryCenter, null);
+  assert.equal(app.controller.locked, false);
+  app.controller.tick(100);
+  window.dispatchEvent(new Event('iowa-tutorial-complete'));
+  assert.equal(app.status.phase, 'explore');
+  assert.equal(app.checkpoint, undefined);
+  app.controller.destroy();
+});
+
+
+test('a flight before the first completed landmark resumes its actual position and heading', () => {
+  const first = setup();
+  window.dispatchEvent(new Event('iowa-tutorial-complete'));
+  Object.assign(first.drone, { lat: 41.592, lng: -93.613, height: 340, heading: 2.4 });
+  const snapshot = first.controller.snapshot(2);
+  assert.equal(snapshot.completed, 0);
+  saveFlightSession(snapshot);
+  assert.deepEqual(loadFlightSession(), snapshot);
+  first.controller.destroy();
+  const resumed = setup({ resumeSession: snapshot });
+  assert.deepEqual(resumed.drone, snapshot.position);
+  assert.equal(resumed.status.phase, 'navigate');
+  assert.equal(resumed.status.completed, 0);
+  assert.equal(resumed.rewards, 0);
+  window.dispatchEvent(new Event('iowa-tutorial-complete'));
+  assert.equal(resumed.status.phase, 'navigate');
+  resumed.controller.destroy();
+});
+
+test('exploration resumes where you flew, while an explicitly different QR place wins', () => {
+  const first = setup({ previewStopId: 'high-trestle' });
+  Object.assign(first.drone, { lat: 41.86, lng: -93.84, heading: 2.2 });
+  const snapshot = first.controller.snapshot(1);
+  first.controller.destroy();
+  for (const previewStopId of [undefined, 'high-trestle']) {
+    const resumed = setup({ resumeSession: snapshot, previewStopId });
+    assert.deepEqual(resumed.drone, snapshot.position);
+    assert.equal(resumed.status.phase, 'explore');
+    assert.equal(resumed.status.completed, 0);
+    resumed.controller.destroy();
+  }
+  const other = setup({ resumeSession: snapshot, previewStopId: 'chichaqua' });
+  assert.equal(JOURNEY_STOPS[other.status.index].id, 'chichaqua');
+  assert.notEqual(other.drone.lat, snapshot.position.lat);
+  other.controller.destroy();
+});
+
+test('portal resume preserves the portal and solved questions cannot award a second boost', () => {
+  const first = setup({ resumeCheckpoint: { completed: 2, position: { lat: 41.6, lng: -93.7, height: 340, heading: 1 }, boostCharges: 2 } });
+  const snapshot = first.controller.snapshot(2);
+  assert.equal(snapshot.phase, 'portal');
+  const portal = snapshot.portalPosition;
+  first.controller.destroy();
+  const resumed = setup({ resumeSession: snapshot });
+  assert.equal(resumed.status.phase, 'portal');
+  assert.deepEqual(resumed.controller.snapshot(2).portalPosition, portal);
+  assert.deepEqual(resumed.drone, snapshot.position);
+  resumed.controller.destroy();
+  const question = setup({ resumeSession: { ...snapshot, stopId: JOURNEY_STOPS[0].id, completed: 1, phase: 'question', shot: 2 } });
+  assert.equal(question.status.phase, 'question');
+  assert.equal(question.status.answerCorrect, true);
+  action(String(JOURNEY_STOPS[0].answer));
+  assert.equal(question.rewards, 0);
+  action('next');
+  assert.equal(question.status.index, 1);
+  question.controller.destroy();
+});
+
+test('restart clears both flight and route progress, and invalid sessions fail safely', () => {
+  const app = setup();
+  const snapshot = app.controller.snapshot(0);
+  saveFlightSession(snapshot);
+  assert.ok(loadFlightSession());
+  let resets = 0;
+  window.addEventListener('iowa-flight-reset', () => resets++);
+  clearJourneyCheckpoint();
+  assert.equal(loadFlightSession(), undefined);
+  assert.equal(resets, 1);
+  saveFlightSession({ ...snapshot, position: { ...snapshot.position, lat: 100 } });
+  assert.equal(loadFlightSession(), undefined);
+  saveFlightSession({ ...snapshot, phase: 'portal', portalPosition: undefined });
+  assert.equal(loadFlightSession(), undefined);
+  saveFlightSession(snapshot);
+  clearFlightSession();
+  assert.equal(loadFlightSession(), undefined);
+  app.controller.destroy();
+});
+
+test('nearby readings open without hovering and stay dismissed until you leave and return', () => {
+  const places = [{ id: 'river', lat: 42, lng: -93 }, { id: 'prairie', lat: 43, lng: -93 }];
+  const proximity = createLandmarkProximity(places);
+  assert.equal(proximity.update({ lat: 41.98, lng: -93 }), undefined);
+  assert.equal(proximity.update({ lat: 42.005, lng: -93 }).id, 'river');
+  assert.equal(proximity.update({ lat: 42.007, lng: -93 }), undefined, 'edge movement must not reopen the card');
+  proximity.dismiss('river');
+  assert.equal(proximity.update({ lat: 42, lng: -93 }), undefined);
+  assert.equal(proximity.update({ lat: 42.012, lng: -93 }), undefined);
+  assert.equal(proximity.update({ lat: 42, lng: -93 }).id, 'river');
+  assert.equal(proximity.update({ lat: 43, lng: -93 }).id, 'prairie');
 });

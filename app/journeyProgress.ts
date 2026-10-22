@@ -1,4 +1,5 @@
 import { JOURNEY_STOPS } from "./journeyStops";
+import { clearFlightSession } from "./flightSession";
 
 export type JourneyCheckpointPosition = {
   lat: number;
@@ -109,6 +110,7 @@ export function saveJourneyCheckpoint(checkpoint: JourneyCheckpoint) {
 }
 
 export function clearJourneyCheckpoint() {
+  clearFlightSession();
   if (typeof window === "undefined") {
     return;
   }

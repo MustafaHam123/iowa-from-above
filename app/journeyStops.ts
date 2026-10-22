@@ -155,7 +155,7 @@ export const JOURNEY_STOPS: JourneyStop[] = ISSUE_PLACES.map((stop) => {
   };
 });
 
-export type JourneyPhase = "tutorial" | "navigate" | "cinematic" | "question" | "portal" | "transfer" | "complete";
+export type JourneyPhase = "tutorial" | "navigate" | "cinematic" | "question" | "portal" | "transfer" | "complete" | "explore";
 export type JourneyStatus = {
   phase: JourneyPhase;
   index: number;
