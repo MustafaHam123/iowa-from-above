@@ -5,22 +5,21 @@ import { useEffect, useState } from "react";
 import { loadJourneyCheckpoint } from "./journeyProgress";
 
 const INTRO_STEPS = [
-  { type: "text", content: "Every place has a story." },
+  { type: "text", content: "Iowa From Above", holdMs: 1_200 },
   {
     type: "text",
-    content: "But history means more when you can explore where it happened.",
+    content: "Nitrate pollution. Soil loss. Flooding. Iowa’s water problems reach far downstream.",
+    holdMs: 4_200,
   },
   {
     type: "text",
-    content: "Take to the skies and discover Iowa from a new perspective.",
+    content: "Follow the water. See what can help.",
+    holdMs: 2_200,
   },
-  { type: "text", content: "Welcome to Iowa From Above." },
-  { type: "image", content: "Congressional App Challenge 2026" },
+  { type: "image", content: "Congressional App Challenge 2026", holdMs: 1_800 },
 ] as const;
 
 const BLACK_GAP_MS = 350;
-const CONTENT_HOLD_MS = 2_400;
-const LOGO_HOLD_MS = 4_000;
 const CONTENT_FADE_MS = 750;
 const OVERLAY_FADE_MS = 1_000;
 const SKIP_PROGRESS_MS = 3_000;
@@ -60,10 +59,7 @@ export default function IntroSequence() {
       return;
     }
 
-    const holdMs =
-      INTRO_STEPS[stepIndex].type === "image"
-        ? LOGO_HOLD_MS
-        : CONTENT_HOLD_MS;
+    const holdMs = INTRO_STEPS[stepIndex].holdMs;
     const showTimer = window.setTimeout(
       () => setIsContentVisible(true),
       BLACK_GAP_MS,

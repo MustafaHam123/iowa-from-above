@@ -183,9 +183,9 @@ test('all 12 stops: tutorial gating, arrival, cinematic, answers, portal flight,
     if (index === 0) app.setSurfaceHeight(240);
     action('next');
     if (index < 11) {
-      if (index === 1) {
+      if (index === 0) {
         assert.equal(app.status.phase, 'navigate', 'nearby landmarks should use a direct flight instead of a portal');
-        assert.match(app.status.message, /West Mixmaster/);
+        assert.match(app.status.message, /Water Works Park/);
         continue;
       }
 
@@ -203,35 +203,24 @@ test('all 12 stops: tutorial gating, arrival, cinematic, answers, portal flight,
       assert.equal(viewer.entities.values.filter(e => e.show && e.plane).length, 0, 'portals should not have a world label');
       const center = portal.position.getValue();
       const portalHeight = Cesium.Cartographic.fromCartesian(center).height;
-      const portalClearance = index === 0 ? 100 : 170;
+      const portalClearance = 170;
       const expectedPortalHeight = Math.max(drone.height, stop.elevation + portalClearance);
-      assert.ok(Math.abs(portalHeight - expectedPortalHeight) < 0.1, 'the first portal should sit lower while every portal remains above its completed landmark');
+      assert.ok(Math.abs(portalHeight - expectedPortalHeight) < 0.1, 'each portal must remain above its completed landmark');
       const setDroneFromWorld = position => {
         const point = Cesium.Cartographic.fromCartesian(position);
         Object.assign(drone, { lat: Cesium.Math.toDegrees(point.latitude), lng: Cesium.Math.toDegrees(point.longitude), height: point.height });
       };
-      if (index === 0) {
-        const portalCartographic = Cesium.Cartographic.fromCartesian(center);
-        Object.assign(drone, {
-          lat: Cesium.Math.toDegrees(portalCartographic.latitude),
-          lng: Cesium.Math.toDegrees(portalCartographic.longitude),
-          height: 150,
-        });
-        controller.tick(0.1);
-        assert.equal(app.status.phase, 'transfer', 'crossing the visible first portal must teleport regardless of its billboard center height');
-      } else {
-        const droneBeforePortal = Cesium.Cartesian3.fromDegrees(drone.lng, drone.lat, drone.height);
-        const approachDirection = Cesium.Cartesian3.normalize(
-          Cesium.Cartesian3.subtract(droneBeforePortal, center, new Cesium.Cartesian3()),
-          new Cesium.Cartesian3(),
-        );
-        setDroneFromWorld(Cesium.Cartesian3.add(center, Cesium.Cartesian3.multiplyByScalar(approachDirection, 105, new Cesium.Cartesian3()), new Cesium.Cartesian3()));
-        controller.tick(0.1);
-        assert.equal(app.status.phase, 'portal', 'approaching the hitbox must not teleport before contact');
-        setDroneFromWorld(Cesium.Cartesian3.add(center, Cesium.Cartesian3.multiplyByScalar(approachDirection, 95, new Cesium.Cartesian3()), new Cesium.Cartesian3()));
-        controller.tick(0.1);
-        assert.equal(app.status.phase, 'transfer');
-      }
+      const droneBeforePortal = Cesium.Cartesian3.fromDegrees(drone.lng, drone.lat, drone.height);
+      const approachDirection = Cesium.Cartesian3.normalize(
+        Cesium.Cartesian3.subtract(droneBeforePortal, center, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3(),
+      );
+      setDroneFromWorld(Cesium.Cartesian3.add(center, Cesium.Cartesian3.multiplyByScalar(approachDirection, 105, new Cesium.Cartesian3()), new Cesium.Cartesian3()));
+      controller.tick(0.1);
+      assert.equal(app.status.phase, 'portal', 'approaching the hitbox must not teleport before contact');
+      setDroneFromWorld(Cesium.Cartesian3.add(center, Cesium.Cartesian3.multiplyByScalar(approachDirection, 95, new Cesium.Cartesian3()), new Cesium.Cartesian3()));
+      controller.tick(0.1);
+      assert.equal(app.status.phase, 'transfer');
       assert.equal(app.status.message, 'Teleporting');
       controller.tick(0.7); assert.equal(app.warps, before + 1);
       controller.tick(1); assert.equal(app.status.phase, 'navigate');
@@ -377,14 +366,14 @@ test('completed landmarks resume from their checkpoint at the next travel object
     },
     boostCharges: 1,
   };
-  const portalResume = setup({ resumeCheckpoint: firstCheckpoint });
+  const directResume = setup({ resumeCheckpoint: firstCheckpoint });
 
-  assert.equal(portalResume.status.completed, 1);
-  assert.equal(portalResume.status.index, 1);
-  assert.equal(portalResume.status.phase, 'portal');
-  assert.match(portalResume.status.message, /Living History Farms/);
-  assert.ok(portalResume.viewer.entities.values.some(entity => entity.show && entity.billboard));
-  portalResume.controller.destroy();
+  assert.equal(directResume.status.completed, 1);
+  assert.equal(directResume.status.index, 1);
+  assert.equal(directResume.status.phase, 'navigate');
+  assert.match(directResume.status.message, /Water Works Park/);
+  assert.ok(directResume.viewer.entities.values.some(entity => entity.show && entity.plane));
+  directResume.controller.destroy();
 
   const secondCheckpoint = {
     completed: 2,
@@ -396,13 +385,13 @@ test('completed landmarks resume from their checkpoint at the next travel object
     },
     boostCharges: 2,
   };
-  const nearbyResume = setup({ resumeCheckpoint: secondCheckpoint });
+  const distantResume = setup({ resumeCheckpoint: secondCheckpoint });
 
-  assert.equal(nearbyResume.status.completed, 2);
-  assert.equal(nearbyResume.status.index, 2);
-  assert.equal(nearbyResume.status.phase, 'navigate');
-  assert.match(nearbyResume.status.message, /West Mixmaster/);
-  nearbyResume.controller.destroy();
+  assert.equal(distantResume.status.completed, 2);
+  assert.equal(distantResume.status.index, 2);
+  assert.equal(distantResume.status.phase, 'portal');
+  assert.match(distantResume.status.message, /Raccoon River at Van Meter/);
+  distantResume.controller.destroy();
 });
 
 test('landmark progress persists as a validated device checkpoint', () => {
@@ -425,8 +414,15 @@ test('landmark progress persists as a validated device checkpoint', () => {
     boostCharges: 2,
   };
 
+  values.set('iowa-from-above:journey-checkpoint:v1', JSON.stringify({
+    ...checkpoint, version: 1, completedStopId: 'capitol',
+  }));
+  values.set('iowa-from-above-audio-muted', 'true');
+  assert.equal(loadJourneyCheckpoint(), undefined, 'old route progress must not resume against reordered destinations');
   saveJourneyCheckpoint(checkpoint);
   assert.deepEqual(loadJourneyCheckpoint(), checkpoint);
   clearJourneyCheckpoint();
   assert.equal(loadJourneyCheckpoint(), undefined);
+  assert.equal(values.has('iowa-from-above:journey-checkpoint:v1'), false);
+  assert.equal(values.get('iowa-from-above-audio-muted'), 'true', 'restart must preserve audio preferences');
 });

@@ -14,11 +14,13 @@ export type JourneyCheckpoint = {
 };
 
 type StoredJourneyCheckpoint = JourneyCheckpoint & {
-  version: 1;
+  version: 2;
   completedStopId: string;
 };
 
-const JOURNEY_PROGRESS_STORAGE_KEY = "iowa-from-above:journey-checkpoint:v1";
+// The environmental route has different destinations and ordering. Old
+// sightseeing progress cannot safely resume at the same numeric position.
+const JOURNEY_PROGRESS_STORAGE_KEY = "iowa-from-above:journey-checkpoint:v2";
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -34,7 +36,7 @@ export function loadJourneyCheckpoint(): JourneyCheckpoint | undefined {
       window.localStorage.getItem(JOURNEY_PROGRESS_STORAGE_KEY) ?? "null",
     ) as Partial<StoredJourneyCheckpoint> | null;
 
-    if (!stored || stored.version !== 1 || typeof stored.completedStopId !== "string") {
+    if (!stored || stored.version !== 2 || typeof stored.completedStopId !== "string") {
       return undefined;
     }
 
@@ -89,7 +91,7 @@ export function saveJourneyCheckpoint(checkpoint: JourneyCheckpoint) {
   );
   const completedStop = JOURNEY_STOPS[completed - 1];
   const stored: StoredJourneyCheckpoint = {
-    version: 1,
+    version: 2,
     completedStopId: completedStop.id,
     completed,
     position: { ...checkpoint.position },
@@ -113,6 +115,7 @@ export function clearJourneyCheckpoint() {
 
   try {
     window.localStorage.removeItem(JOURNEY_PROGRESS_STORAGE_KEY);
+    window.localStorage.removeItem("iowa-from-above:journey-checkpoint:v1");
   } catch {
     // Storage restrictions must not prevent the game from restarting.
   }

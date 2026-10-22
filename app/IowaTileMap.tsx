@@ -2,7 +2,7 @@
 
 import { FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import * as Cesium from "cesium";
-import "cesium/Build/Cesium/Widgets/widgets.css";
+import { alignSkyBoxToLocalHorizon } from "./skyOrientation";
 import { ACES_FILMIC_FRAGMENT_SHADER } from "./shaders/acesFilmic";
 import { DEPTH_DISTANCE_BLUR_FRAGMENT_SHADER } from "./shaders/depthDistanceBlur";
 import { PIXEL_FILTER_FRAGMENT_SHADER } from "./shaders/pixelFilter";
@@ -12,6 +12,8 @@ import {
 import { INITIAL_JOURNEY, JOURNEY_STOPS } from "./journeyStops";
 import { EXHIBITS } from "./exhibits";
 import LandmarkChat from "./LandmarkChat";
+import EnvironmentalFieldSigns from "./EnvironmentalFieldSigns";
+import EnvironmentalInsights, { type EnvironmentalSelection } from "./EnvironmentalInsights";
 import OutroSequence from "./OutroSequence";
 import {
   clearJourneyCheckpoint,
@@ -427,6 +429,10 @@ function applyGoldenHourPreset(
 }
 
 export default function IowaTileMap() {
+  const environmentalPositionRef = useRef({ lat: DRONE_START.lat, lng: DRONE_START.lng });
+  const [environmentalSelection, setEnvironmentalSelection] = useState<EnvironmentalSelection | null>(null);
+  const [environmentalChatRequest, setEnvironmentalChatRequest] = useState(0);
+  const [fieldSignsEnabled, setFieldSignsEnabled] = useState(true);
   const cesiumRef = useRef<HTMLDivElement>(null);
   const droneOverlayRef = useRef<HTMLDivElement>(null);
   const altitudeReadoutRef = useRef<HTMLOutputElement>(null);
@@ -757,6 +763,8 @@ export default function IowaTileMap() {
     viewer.scene.skyBox = new Cesium.SkyBox({
       sources: SUNSET_SKYBOX_SOURCES,
     });
+    const orientSky = alignSkyBoxToLocalHorizon(viewer.scene.skyBox, Cesium.Cartesian3.fromDegrees(DRONE_START.lng, DRONE_START.lat));
+    const removeSkyOrientation = viewer.scene.preRender.addEventListener(() => orientSky(viewer.camera.positionWC));
     viewer.resolutionScale = 1;
     cleanDroneViewer.scene.backgroundColor = Cesium.Color.TRANSPARENT;
     cleanDroneViewer.scene.skyAtmosphere = undefined;
@@ -1320,6 +1328,8 @@ export default function IowaTileMap() {
     }
 
     const removeTick = viewer.clock.onTick.addEventListener(() => {
+      environmentalPositionRef.current.lat = drone.lat;
+      environmentalPositionRef.current.lng = drone.lng;
       const now = performance.now();
       const deltaSeconds = Math.min((now - lastTick) / 1000, 0.08);
       lastTick = now;
@@ -1758,6 +1768,7 @@ export default function IowaTileMap() {
     return () => {
       isDestroyed = true;
       removeTick();
+      removeSkyOrientation();
       journey.destroy();
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
@@ -1794,6 +1805,7 @@ export default function IowaTileMap() {
     <main className="fixed inset-0 overflow-hidden bg-black">
       <div ref={cesiumRef} className="absolute inset-0" />
       <div ref={droneOverlayRef} className="pointer-events-none absolute inset-0 z-10" />
+      <EnvironmentalFieldSigns viewerRef={viewerRef} positionRef={environmentalPositionRef} issueId={currentExhibit.id} enabled={fieldSignsEnabled} />
       <details
         className="api-stats-menu absolute right-3 top-3 z-20 text-white sm:right-5"
         onToggle={(event) => setIsApiStatsOpen(event.currentTarget.open)}
@@ -1818,6 +1830,16 @@ export default function IowaTileMap() {
                 : <path d="M16 9.5c1.4 1.4 1.4 3.6 0 5m2.5-7.5c2.8 2.8 2.8 7.2 0 10" />}
             </svg>
             <span>{isAudioMuted ? "Unmute audio" : "Mute audio"}</span>
+          </button>
+          <button
+            type="button"
+            className="api-settings__mute"
+            onClick={() => {
+              clearJourneyCheckpoint();
+              window.location.reload();
+            }}
+          >
+            Restart journey
           </button>
           <div className="api-call-tracker__heading">
             <strong>Monthly usage</strong>
@@ -1955,32 +1977,13 @@ export default function IowaTileMap() {
           onVisitAddress={openAddressSearchFromJourneyPrompt}
         />
       )}
-      {journeyStatus.phase === "cinematic" && (
-        <aside
-          aria-label={`Exhibit notes for ${currentExhibit.name}`}
-          className="exhibit-peek journey-panel journey-panel--reverse absolute left-3 top-1/2 z-20 w-[min(18rem,calc(100vw-1.5rem))] -translate-y-1/2 px-6 py-5 text-white sm:left-5"
-        >
-          <h2>{currentExhibit.name}</h2>
-          <ul>
-            <li>{currentExhibit.summary}</li>
-            <li>{currentExhibit.funFact}</li>
-            <li>{currentExhibit.statistic.value} {currentExhibit.statistic.label}. {currentExhibit.statistic.detail}</li>
-          </ul>
-          <a
-            className="exhibit-peek__read-more"
-            href={`/exhibits/${currentExhibit.id}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Read more
-          </a>
-        </aside>
-      )}
       {journeyStatus.phase !== "tutorial" && (
         <LandmarkChat
           key={currentExhibit.id}
           exhibit={currentExhibit}
           phase={journeyStatus.phase}
+          environmentalSelection={environmentalSelection}
+          environmentalChatRequest={environmentalChatRequest}
         />
       )}
       <div className="journey-dock absolute bottom-7 right-3 z-20 flex flex-col items-end gap-3 sm:right-5">
@@ -2009,43 +2012,39 @@ export default function IowaTileMap() {
         </div>
         <aside
           aria-label="Journey notifications"
-          className="journey-card journey-panel pointer-events-none relative min-h-28 w-[min(21rem,calc(100vw-1.5rem))] pb-4 pl-6 pr-8 pt-4 text-white"
+          className="journey-card journey-panel pointer-events-none relative w-[min(18rem,calc(100vw-1.5rem))] pb-3 pl-6 pr-7 pt-3 text-white"
         >
-        <p className="text-sm font-medium tracking-normal text-white/70 sm:text-base">
-          Journey
-        </p>
-        <div className="mt-2 flex items-baseline justify-between gap-4 border-b border-white/10 pb-3">
-          <span className="text-sm text-white/65">Landmarks explored</span>
-          <strong className="font-mono text-sm font-medium tabular-nums text-white">
+        <div className="flex items-baseline justify-between gap-4">
+          <p className="text-sm font-medium text-white/70">Journey</p>
+          <span className="font-mono text-xs tabular-nums text-white/65" aria-label={`${journeyStatus.completed} of ${JOURNEY_STOPS.length} issues explored`}>
             {journeyStatus.completed}/{JOURNEY_STOPS.length}
-          </strong>
+          </span>
         </div>
-        <div className="mt-3">
-          <p className="text-sm leading-5 tracking-normal text-white">
+        <div className="mt-2">
+          <p className="text-sm leading-5 text-white">
             {journeyStatus.phase === "tutorial"
-              ? "Complete the tutorial to begin"
+              ? "Complete tutorial"
               : journeyStatus.phase === "complete"
-                ? "Iowa explored. Keep flying."
+                ? "Journey complete"
                 : journeyStatus.phase === "portal"
-                  ? "Travel to the portal"
-                  : journeyStatus.phase === "navigate"
-                    ? `Travel to ${JOURNEY_STOPS[journeyStatus.index].name}`
-                    : JOURNEY_STOPS[journeyStatus.index].name}
+                  ? "Reach portal"
+                  : JOURNEY_STOPS[journeyStatus.index].name}
           </p>
-          {(journeyStatus.phase === "navigate" || journeyStatus.phase === "portal") && <p className="mt-1 text-xs text-white/60">{journeyStatus.direction} · {journeyStatus.distance.toLocaleString()} m · {journeyStatus.phase === "portal" ? "Enter the portal" : "Follow the purple line"}</p>}
+          {(journeyStatus.phase === "navigate" || journeyStatus.phase === "portal") && <p className="mt-1 text-xs text-white/60">{journeyStatus.direction} · {journeyStatus.distance.toLocaleString()} m</p>}
           {journeyStatus.phase === "complete" && (
             <button
               type="button"
-              className="journey-restart pointer-events-auto mt-3 w-full px-3 py-2 text-sm"
+              className="journey-restart pointer-events-auto mt-2 w-full px-3 py-2 text-sm"
               onClick={() => {
                 clearJourneyCheckpoint();
                 window.location.reload();
               }}
             >
-              Restart your journey
+              Restart journey
             </button>
           )}
         </div>
+        <EnvironmentalInsights viewerRef={viewerRef} positionRef={environmentalPositionRef} onSelection={setEnvironmentalSelection} onAsk={() => setEnvironmentalChatRequest((n) => n + 1)} chatAvailable={journeyStatus.phase !== "tutorial" && journeyStatus.phase !== "question"} signsEnabled={fieldSignsEnabled} onSignsChange={setFieldSignsEnabled} />
         </aside>
         <div className="mobile-journey-objective" aria-live="polite">
           {journeyStatus.phase === "portal"

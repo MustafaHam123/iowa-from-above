@@ -9,6 +9,7 @@ import {
 import type { JourneyCheckpoint } from "./journeyProgress";
 import {
   announceGuideAudio,
+  announceGuideSubtitle,
   AUDIO_MUTED_EVENT,
   getStoredAudioMuted,
 } from "./audioPreferences";
@@ -273,8 +274,8 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
     const ctx = markerCanvas.getContext("2d")!;
     ctx.clearRect(0, 0, markerCanvas.width, markerCanvas.height);
     const fill = ctx.createLinearGradient(0, 0, 0, markerCanvas.height);
-    fill.addColorStop(0, "#3b3e43");
-    fill.addColorStop(1, "#25272b");
+    fill.addColorStop(0, "rgba(59,62,67,0.76)");
+    fill.addColorStop(1, "rgba(37,39,43,0.68)");
     ctx.beginPath();
     ctx.moveTo(60, 8);
     ctx.lineTo(1008, 8);
@@ -283,14 +284,17 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
     ctx.closePath();
     ctx.fillStyle = fill;
     ctx.fill();
-    ctx.strokeStyle = "#92959a";
+    ctx.strokeStyle = "rgba(255,255,255,0.68)";
     ctx.lineWidth = 5;
     ctx.stroke();
     ctx.fillStyle = "#f5f5f5";
+    ctx.shadowColor = "rgba(0,0,0,0.95)";
+    ctx.shadowBlur = 10;
     ctx.font = "600 49px sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(title, 512, 128, 860);
+    markerPlaque.properties = new C.PropertyBag({ fieldSignId: JOURNEY_STOPS[status.index].id });
     markerPlaque.position = new C.ConstantPositionProperty(plaquePosition);
     markerPlaque.plane!.material = new C.ImageMaterialProperty({
       image: markerCanvas.toDataURL(),
@@ -377,8 +381,13 @@ const portalBody = add({ show: false, position: world(drone), billboard: {
       },
     );
   }
-  function playGuidance(src: string, transcript: string) {
+  function playGuidance(src: string | undefined, transcript: string) {
     guidanceAudio?.pause();
+    if (!src) {
+      guidanceAudio = undefined;
+      announceGuideSubtitle(transcript);
+      return;
+    }
     const clip = new Audio(src);
     clip.preload = "auto";
     clip.muted = audioMuted;

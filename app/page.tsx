@@ -26,15 +26,15 @@ export default function Home() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
       />
       <section className="sr-only" aria-label="About Iowa From Above">
-        <h1>Iowa From Above: an interactive 3D Iowa history tour</h1>
+        <h1>Iowa From Above: Iowa’s environmental challenges</h1>
         <p>
-          Fly a virtual drone across Iowa to explore landmarks, communities,
-          natural areas, transportation, agriculture, and local history. Each
-          stop combines a photorealistic aerial view with verified facts,
-          narrated guidance, questions, and a detailed exhibit article.
+          Explore Iowa’s water-quality challenges, agricultural runoff, flood
+          exposure and habitat protection through twelve place-based lessons.
+          Inspect official USGS observations and FEMA maps, then learn what
+          conservation and restoration can help communities do.
         </p>
-        <nav aria-label="Iowa landmark exhibits">
-          <h2>Explore Iowa landmarks</h2>
+        <nav aria-label="Iowa environmental lessons">
+          <h2>Explore Iowa’s environmental issues</h2>
           <ul>
             {EXHIBITS.map((exhibit) => (
               <li key={exhibit.id}>
