@@ -1772,6 +1772,18 @@ body:has(.exhibit-article-page)::-webkit-scrollbar-thumb {
 .environment-insights__advanced > summary { color: #ffffff80; }
 
 /* Companion controls share the Journey material, with camera access on demand. */
+.audio-credit {
+  position: fixed;
+  right: max(6px, env(safe-area-inset-right));
+  bottom: max(4px, env(safe-area-inset-bottom));
+  z-index: 100;
+  color: rgb(255 255 255 / 0.5);
+  font-size: 8px;
+  line-height: 1.2;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+  pointer-events: none;
+}
+
 .place-companion { font-size: 11px; }
 .place-companion__actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .place-companion__trigger { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; font-size: 12px; font-weight: 500; cursor: pointer; }
